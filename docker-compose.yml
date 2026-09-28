@@ -1,0 +1,75 @@
+# Secure Enterprise AI Evaluation Sandbox
+#
+# Task 1 services: Postgres + pgvector (vector store) and Ollama (local models).
+# The `backend` service is a CLI container for ingest/query/tests; it gets a
+# long-running FastAPI command in Task 4. Task 8 moves everything onto an
+# `internal: true` network for the air-gap proof.
+name: ai-eval-sandbox
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sandbox}
+      # Required: fail fast rather than fall back to a committed default password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (cp .env.example .env)}
+      POSTGRES_DB: ${POSTGRES_DB:-sandbox}
+    ports:
+      # Bound to loopback only, so the DB is reachable from this machine but not the LAN.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434"
+    volumes:
+      # Model weights live here so they survive container restarts and are
+      # pulled only once (the one allowed network step).
+      - ollama_models:/root/.ollama
+    environment:
+      # Keep models loaded between requests so latency numbers aren't
+      # dominated by repeated cold loads.
+      OLLAMA_KEEP_ALIVE: 30m
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build: ./backend
+    # Only started on demand (`docker compose run --rm backend ...`) until the
+    # FastAPI gateway exists in Task 4.
+    profiles: ["cli"]
+    environment:
+      # Inside Compose, reach services by name, not localhost.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-sandbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (cp .env.example .env)}
+      POSTGRES_DB: ${POSTGRES_DB:-sandbox}
+      OLLAMA_BASE_URL: http://ollama:11434
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      LLM_MODEL: ${LLM_MODEL:-llama3}
+      POLICIES_DIR: /data/policies
+    volumes:
+      # Mount source so code edits don't need an image rebuild.
+      - ./backend/app:/code/app
+      - ./backend/tests:/code/tests
+      - ./data:/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  ollama_models:
