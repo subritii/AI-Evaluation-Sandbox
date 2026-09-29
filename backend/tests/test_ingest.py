@@ -48,6 +48,40 @@ def test_real_policy_document_chunks():
         pytest.skip("policy directory not available")
     chunks = chunk_documents(load_documents(policies), chunk_size=1000, chunk_overlap=150)
     assert len(chunks) >= 10
+    # The CVV rule must sit in a Payment Card Data chunk, not one shared with section 8.
+    [cvv_chunk] = [c for c in chunks if "CVV" in c.page_content]
+    assert cvv_chunk.metadata["section"] == "9. Payment Card Data"
+    assert cvv_chunk.page_content.startswith("## 9. Payment Card Data\n\n")
+    assert "## 8." not in cvv_chunk.page_content
+
+
+@pytest.fixture
+def markdown_dir(tmp_path: Path) -> Path:
+    text = (
+        "# Test Policy\n\nIntro paragraph.\n\n"
+        "## 1. Short Section\n\nShort rule text.\n\n"
+        "## 2. Long Section\n\n" + "\n\n".join(f"Long rule {i}. " + "detail " * 30 for i in range(6))
+    )
+    (tmp_path / "policy.md").write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def test_markdown_chunks_never_straddle_sections(markdown_dir):
+    chunks = chunk_documents(load_documents(markdown_dir), chunk_size=400, chunk_overlap=40)
+    for chunk in chunks:
+        body = chunk.page_content.split("\n\n", 1)[1]
+        assert "## " not in body  # no second heading inside a chunk
+    assert chunks[0].page_content == "# Test Policy\n\nIntro paragraph."
+    assert chunks[1].page_content == "## 1. Short Section\n\nShort rule text."
+    assert chunks[1].metadata == {"source": "policy.md", "title": "Test Policy", "section": "1. Short Section", "chunk_index": 1}
+
+
+def test_long_section_falls_back_to_size_split_with_prefix(markdown_dir):
+    chunks = chunk_documents(load_documents(markdown_dir), chunk_size=400, chunk_overlap=40)
+    long_chunks = [c for c in chunks if c.metadata.get("section") == "2. Long Section"]
+    assert len(long_chunks) > 1
+    assert all(c.page_content.startswith("## 2. Long Section\n\n") for c in long_chunks)
+    assert all(len(c.page_content) <= 400 for c in chunks)  # prefix counts toward the limit
 
 
 def test_nomic_task_prefixes_are_applied():

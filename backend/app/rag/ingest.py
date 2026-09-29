@@ -1,6 +1,6 @@
 """Ingest policy documents into pgvector.
 
-Pipeline per file:  load -> chunk -> Trust Engine scrub -> embed -> store
+Pipeline per file:  load -> chunk (Markdown headers, then size) -> Trust Engine scrub -> embed -> store
 
 Run inside Compose:
     docker compose run --rm backend python -m app.rag.ingest
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from psycopg.types.json import Jsonb
 from pypdf import PdfReader
 
@@ -54,14 +54,25 @@ def load_documents(policies_dir: Path) -> list[Document]:
     return documents
 
 
-def chunk_documents(documents: list[Document], chunk_size: int, chunk_overlap: int) -> list[Document]:
-    """Split documents into overlapping chunks, numbering chunks per source file.
+# Header levels to split Markdown on, and the metadata key each one fills.
+MARKDOWN_HEADERS = [("#", "title"), ("##", "section")]
 
-    RecursiveCharacterTextSplitter tries paragraph breaks first, then lines,
-    then words, so chunks follow the document's structure where possible.
+
+def chunk_documents(documents: list[Document], chunk_size: int, chunk_overlap: int) -> list[Document]:
+    """Split documents into chunks, numbering chunks per source file.
+
+    Markdown files are split on headers first, so a chunk never straddles two
+    policy sections (a pure size-based split put the end of one section and
+    the start of the next in the same chunk, which blurs its embedding).
+    Sections longer than `chunk_size` then fall back to size-based splitting.
+    Other file types have no header structure and use size-based splitting only.
     """
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    chunks = splitter.split_documents(documents)
+    chunks: list[Document] = []
+    for document in documents:
+        if document.metadata["source"].lower().endswith(".md"):
+            chunks.extend(_split_markdown(document, chunk_size, chunk_overlap))
+        else:
+            chunks.extend(_size_splitter(chunk_size, chunk_overlap).split_documents([document]))
 
     counters: dict[str, int] = {}
     for chunk in chunks:
@@ -69,6 +80,37 @@ def chunk_documents(documents: list[Document], chunk_size: int, chunk_overlap: i
         chunk.metadata["chunk_index"] = counters.get(source, 0)
         counters[source] = chunk.metadata["chunk_index"] + 1
     return chunks
+
+
+def _split_markdown(document: Document, chunk_size: int, chunk_overlap: int) -> list[Document]:
+    """Split one Markdown document by section, prefixing each chunk with its heading.
+
+    The heading is kept both as metadata (`section`, `title`) and as the first
+    line of the chunk text. The text prefix is what matters for retrieval:
+    the embedding of a sub-chunk from a long section still "knows" which
+    section it came from, and the LLM sees the heading in its context.
+    """
+    header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=MARKDOWN_HEADERS, strip_headers=True)
+    chunks: list[Document] = []
+    for section in header_splitter.split_text(document.page_content):
+        metadata = {**document.metadata, **section.metadata}
+        # Text before the first "##" (the preamble) is labeled with the document title.
+        if "section" in metadata:
+            prefix = f"## {metadata['section']}\n\n"
+        elif "title" in metadata:
+            prefix = f"# {metadata['title']}\n\n"
+        else:
+            prefix = ""  # Markdown file with no headers: plain size-based chunks.
+        # Reserve room for the prefix so every final chunk stays within chunk_size.
+        body_size = max(chunk_size - len(prefix), chunk_overlap + 1)
+        for piece in _size_splitter(body_size, chunk_overlap).split_text(section.page_content):
+            chunks.append(Document(page_content=prefix + piece, metadata=dict(metadata)))
+    return chunks
+
+
+def _size_splitter(chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
+    """Size-based fallback: tries paragraph breaks, then lines, then words."""
+    return RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
 
 def store_chunks(conn, chunks: list[Document], vectors: list[list[float]], scrubbed_by: list[str], embed_model: str) -> None:
