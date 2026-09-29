@@ -12,6 +12,7 @@ transaction, so a re-ingest never leaves a half-updated document behind.
 import argparse
 import logging
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -179,6 +180,9 @@ def ingest(policies_dir: Path) -> None:
 
     sources = sorted({c.metadata["source"] for c in chunks})
     logger.info("Ingested %d chunks from %d file(s): %s", len(chunks), len(sources), ", ".join(sources))
+    # Entity types and counts only, never the values.
+    masked_counts = sum((Counter(r.entity_counts) for r in results), Counter())
+    logger.info("Scrubbed by %s; masked entities: %s", results[0].scrubbed_by, dict(masked_counts) or "none")
     logger.info(
         "Timings (ms): load+chunk+scrub=%.0f embed=%.0f store=%.0f total=%.0f",
         (t_scrub - t0) * 1000, (t_embed - t_scrub) * 1000, (t_store - t_embed) * 1000, (t_store - t0) * 1000,

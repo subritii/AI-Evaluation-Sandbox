@@ -1,44 +1,33 @@
-"""Trust Engine: PII detection and masking (implemented in Task 2).
+"""Trust Engine: PII detection and masking.
 
 Everything written to the vector table goes through `scrub_for_storage()`.
-Keeping a single chokepoint means Task 2 only has to replace this function's
-body; ingestion code doesn't change.
+Keeping a single chokepoint means callers never touch Presidio directly, and
+`scrubbed_by` on every stored row names the exact scrubber that produced it.
 """
 
-import logging
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 
-logger = logging.getLogger(__name__)
-
-# Recorded in document_chunks.scrubbed_by so un-scrubbed rows are easy to find:
-#   SELECT count(*) FROM document_chunks WHERE scrubbed_by = 'passthrough-stub';
-PASSTHROUGH_STUB = "passthrough-stub"
-
-_warned = False
+from app.trust_engine.engine import detect, mask, scrubber_id
 
 
 @dataclass(frozen=True)
 class ScrubResult:
-    """Text after masking, plus the name of the scrubber that produced it."""
+    """Masked text, the scrubber that produced it, and how many of each entity type were masked.
+
+    `entity_counts` holds types and counts only, never values, so it's safe to log.
+    """
 
     text: str
     scrubbed_by: str
+    entity_counts: dict[str, int] = field(default_factory=dict)
 
 
 def scrub_for_storage(text: str) -> ScrubResult:
-    """Mask PII in `text` before it is embedded or stored.
-
-    TEMPORARY (Task 1): this is a labeled pass-through. It returns the text
-    unchanged and tags it `passthrough-stub`. It is safe only because the
-    Task 1 mock policy contains no PII. Task 2 replaces it with Presidio.
-    """
-    global _warned
-    if not _warned:
-        # Logs a fixed message only, never the text itself.
-        logger.warning(
-            "Trust Engine not implemented yet (Task 2): text is stored UNMASKED "
-            "and tagged scrubbed_by='%s'. Ingest only PII-free documents.",
-            PASSTHROUGH_STUB,
-        )
-        _warned = True
-    return ScrubResult(text=text, scrubbed_by=PASSTHROUGH_STUB)
+    """Mask PII in `text` before it is embedded or stored."""
+    detections = detect(text)
+    return ScrubResult(
+        text=mask(text, detections),
+        scrubbed_by=scrubber_id(),
+        entity_counts=dict(Counter(d.entity_type for d in detections)),
+    )

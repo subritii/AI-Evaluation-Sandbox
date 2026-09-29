@@ -7,3 +7,12 @@ httpx>=0.27
 langchain-text-splitters>=0.3
 pypdf>=5.0
 pytest>=8.0
+# Trust Engine. Pinned so host and container detect identically; the
+# detector eval reports these versions.
+presidio-analyzer==2.2.364
+spacy==3.8.16
+# spaCy NER model, installed at build time (see Dockerfile) so nothing is
+# downloaded at runtime. Presidio would otherwise download a missing model.
+en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl
+# Synthetic labeled data for the detector evaluation.
+faker==40.40.0
