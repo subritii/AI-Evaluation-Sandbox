@@ -339,3 +339,108 @@ This run is faster than the first (pii_scan P95 126 â†’ 92 ms, total P95 3,590 â
 3,341 ms), but host load average was 2.2-4.1 instead of 5.3-7.7. The difference
 is mostly machine load, not the recognizer change: the detector eval, which
 measures pii_scan in isolation, shows no speedup.
+
+---
+
+## Task 7: Dashboard + downloadable report
+
+### What
+
+A Streamlit dashboard in its own container (`dashboard`, http://localhost:8501)
+that goes from upload to report without the terminal:
+
+1. **Run a batch.** Upload a CSV (`question` column) or JSONL
+   (`{"question": ...}` per line), up to 1,000 questions. The questions go
+   through the gateway one by one. A live chart (log scale, so the ~50 ms PII
+   scan and the ~seconds of generation fit on one chart) updates after every
+   request. Then the gateway's per-stage P50/P90/P95/P99 table appears.
+2. **Results.** The saved RAG eval, detector accuracy, and canary audit reports,
+   newest by default and selectable in the sidebar. Each shows its source file,
+   start time, commit, and model backend.
+3. **Report.** One self-contained HTML file: summary tiles, batch latency,
+   RAG quality, detector accuracy, canary audit, and a methodology section.
+   The methodology covers pipeline, configuration as reported by the gateway,
+   how latency is measured, machine load per run, known gaps, and commands to
+   reproduce each number.
+
+Verified in Chrome: uploaded `data/sample_batches/policy_questions.csv`, ran it
+(20/20 OK, run `dashboard-20260929-210005`, native Ollama), watched the chart
+update, opened Results and the report preview. I didn't click the final
+Download button during that test, because downloading needs the user's OK.
+Instead, the report built from the same selected runs was checked: 17 KB, no
+`http(s)://`, no `<script>`, and none of the sample batch's questions or
+synthetic PII.
+
+### How
+
+- `dashboard/batch.py`: parses uploads (errors name the row, never its
+  content), sends each question to `POST /query` under one `run_id` (warmups
+  use a separate `<run_id>-warmup` id and a fixed PII-free question), then
+  fetches `GET /metrics/{run_id}` and saves `reports/dashboard_batch_<ts>.json`.
+  It's also a CLI:
+  `docker compose run --rm dashboard python batch.py /data/sample_batches/policy_questions.jsonl`.
+- `dashboard/reports.py`: reduces each saved report type to a summary with
+  provenance. Fields older reports lack come back as `None` and display as
+  "not recorded".
+- `dashboard/report_html.py`: builds the report with inline CSS only, escapes
+  every value, and has a dark-mode palette.
+- Gateway: new `GET /info` returns non-secret configuration (backend, models,
+  temperature, max tokens, scrubber version) and the load average where the
+  gateway runs.
+- Tests: 22 dashboard tests (`docker compose run --rm --no-deps dashboard
+  pytest`) with HTTP faked via `httpx.MockTransport`. They cover parsing and
+  error messages, no question text in saved runs, the report's sections,
+  provenance, backend-mismatch warning, missing-data wording, and
+  self-containment. Plus one gateway test for `/info`; backend suite at 67
+  passed + 1 xfail.
+
+### Why
+
+- **The dashboard only talks to the gateway.** It has no database credentials,
+  so it can only do what the API allows, and it measures the same path a real
+  client uses. The alternative, querying Postgres directly, would be quicker to
+  build but would put credentials in a second container and create a second
+  path to the data.
+- **Percentiles come from the gateway, not the dashboard.** `/metrics/{run_id}`
+  runs the same numpy code as every script, so a dashboard number and a
+  script number can't disagree. The live chart plots raw per-request timings
+  only.
+- **Saved runs and the report contain no question text, not even masked
+  text.** The first design stored masked questions. That's wrong: the canary
+  audit shows the Trust Engine misses some PII (43/207), so "masked" text can
+  still hold it, and reports get emailed. Masked questions appear only on
+  screen, in-session, for the person who uploaded them. Runs are tied to their
+  input by the file's sha256 instead.
+- **The canary audit stays a host script.** It reads `docker compose logs`,
+  which would need the Docker socket in the dashboard container. The socket
+  effectively grants root on the host, which is too much for a UI. The
+  dashboard shows its saved reports instead.
+- **Every section names its run, and the report says when runs don't match.**
+  If the RAG eval ran on a different backend than the batch, the report warns
+  about it. Missing reports are stated as missing, never filled in. That's
+  rule 4 applied to presentation.
+- **Machine load is labeled by where it was measured.** The batch's load
+  comes from the gateway's environment, which is the Docker Desktop VM on
+  macOS. With native Ollama the models run on the Mac, outside the VM, so the
+  report says the VM figure excludes model load. In the verification run the
+  VM showed 0.5 while the host scripts had recorded 2-11 on the Mac.
+- **Two Streamlit network calls turned off (rule 3).** `gatherUsageStats =
+  false` stops usage telemetry. Separately, bound to `0.0.0.0` with no server
+  address, Streamlit calls `checkip.amazonaws.com` at startup to print an
+  "External URL". The first container start did exactly that; the log showed
+  the machine's public IP. `browser.serverAddress = "localhost"` skips the
+  lookup, and the log now prints only `URL: http://localhost:8501`. The other
+  outbound call sites in Streamlit (remote scripts, remote theme files, the
+  email prompt) don't run in this setup. Task 8's internal network will
+  enforce this instead of relying on config.
+
+### Known limitations
+
+- Requests are sequential by design, so a 1,000-question batch on Docker
+  Ollama (CPU) takes hours. There's no cancel button; stopping the browser tab
+  doesn't stop a running batch.
+- Streamlit keeps imported modules cached, so edits to `batch.py`,
+  `reports.py`, or `report_html.py` need a container restart (`app.py` reloads
+  on refresh).
+- The report's "Known gaps" list is written by hand from this log. The canary
+  "not searched" items are the only gaps pulled from run data.

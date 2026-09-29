@@ -58,11 +58,15 @@ flowchart LR
 │   │   ├── metrics/           # Stage timers, percentile calculations
 │   │   └── db/                # Schema, RLS policies, connection handling
 │   └── tests/
-├── dashboard/
-│   ├── Dockerfile
-│   └── app.py
+├── dashboard/                 # Streamlit container: talks only to the gateway
+│   ├── app.py                 # UI: upload, live latency chart, results, report
+│   ├── batch.py               # Batch parsing and runner (also a CLI)
+│   ├── reports.py             # Reads saved eval / detector / canary reports
+│   ├── report_html.py         # Self-contained HTML report with methodology
+│   └── tests/
 ├── data/
 │   ├── policies/              # Mock bank policy documents
+│   ├── sample_batches/        # Synthetic demo batches (CSV and JSONL)
 │   └── generated/             # Synthetic test datasets (gitignored)
 ├── scripts/
 │   ├── pull_models.sh         # Pre-pull Ollama models
@@ -109,6 +113,17 @@ docker compose up -d
 # API docs:  http://localhost:8000/docs
 ```
 
+### Dashboard
+
+Open http://localhost:8501, upload a CSV (a `question` column) or JSONL
+(`{"question": ...}` per line) batch (try `data/sample_batches/`), click
+**Run batch** to watch per-stage latency live, review the saved RAG eval,
+detector, and canary results under **Results**, and download a self-contained
+HTML report with methodology under **Report**. Uploaded questions are never
+saved; runs are stored in `reports/` as counts and timings only. The same batch
+runs without the UI:
+`docker compose run --rm dashboard python batch.py /data/sample_batches/policy_questions.jsonl`.
+
 After step 3, the sandbox needs no internet access. To prove it, disconnect and run a full evaluation.
 
 ### Dev option: native Ollama on macOS
@@ -132,7 +147,7 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 - [x] **Task 2: Trust Engine.** Presidio with custom recognizers (routing numbers, IBAN, Luhn-validated cards, context-based account numbers); typed placeholders; scrub before embedding; no raw PII in logs.
 - [x] **Task 4: Gateway + latency.** FastAPI `/query` endpoint; per-stage timers; samples stored in Postgres; percentile calculations.
 - [x] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.
-- [ ] **Task 7: Dashboard + report.** Streamlit upload, live latency chart, results panel, downloadable report with methodology.
+- [x] **Task 7: Dashboard + report.** Streamlit upload, live latency chart, results panel, downloadable report with methodology.
 - [ ] **Task 8: Packaging + air-gap proof.** Dockerfiles, `internal: true` network, one-command start.
 
 **Stretch**

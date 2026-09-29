@@ -37,6 +37,7 @@ This is a portfolio project for Solutions Engineer roles. The owner is building 
 ## Conventions
 
 - Backend code lives in `backend/app/`, organized by `trust_engine/`, `rag/`, `metrics/`, `db/`.
+- The dashboard lives in `dashboard/` (its own container). It talks only to the gateway over HTTP and never gets database credentials; logic lives in plain modules (`batch.py`, `reports.py`, `report_html.py`) so it's testable and runnable without the UI. Streamlit caches imported modules: restart the container after editing them.
 - Standalone evaluation scripts live in `scripts/` and write outputs to `reports/`.
 - Config comes from environment variables via `app/config.py`. Inside Compose, reach services by name (`db`, `ollama`), not `localhost`.
 - Tests in `backend/tests/`, named `test_<module>.py`. Add tests with every Trust Engine change, including cases that should NOT be flagged.
@@ -49,9 +50,10 @@ docker compose up -d db ollama          # start infra
 ./scripts/pull_models.sh                # one-time model pull
 docker compose up -d                    # start everything
 docker compose run --rm backend pytest  # run tests
+docker compose run --rm --no-deps dashboard pytest  # dashboard tests
 docker compose logs -f backend          # backend logs
 ```
 
 ## Current focus
 
-Update this line as work progresses: **Tasks 1-4 and 6 done (gateway, per-stage latency, code-attached citations, canary audit; results so far measured on native Ollama). Next: Task 7 (dashboard + report), then Task 8 (packaging + air-gap proof); benchmark the all-Docker configuration for comparison.**
+Update this line as work progresses: **Tasks 1-4, 6, and 7 done (gateway, per-stage latency, code-attached citations, canary audit, Streamlit dashboard + HTML report; results so far measured on native Ollama). Next: Task 8 (packaging + air-gap proof); benchmark the all-Docker configuration for comparison.**
