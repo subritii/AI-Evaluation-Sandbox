@@ -39,3 +39,14 @@ CREATE TABLE IF NOT EXISTS latency_samples (
 );
 
 CREATE INDEX IF NOT EXISTS latency_samples_run_stage ON latency_samples (run_id, stage);
+
+-- Which model runtime and models produced each sample, so a percentile can
+-- never be quoted without its configuration. Added after the table existed:
+-- older rows get 'unknown' (not guessed), then the default is dropped so new
+-- inserts must name the configuration explicitly.
+ALTER TABLE latency_samples ADD COLUMN IF NOT EXISTS model_backend TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE latency_samples ADD COLUMN IF NOT EXISTS llm_model     TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE latency_samples ADD COLUMN IF NOT EXISTS embed_model   TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE latency_samples ALTER COLUMN model_backend DROP DEFAULT;
+ALTER TABLE latency_samples ALTER COLUMN llm_model     DROP DEFAULT;
+ALTER TABLE latency_samples ALTER COLUMN embed_model   DROP DEFAULT;

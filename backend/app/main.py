@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.db.connection import get_connection, init_schema
-from app.metrics.latency import record_samples, run_metrics
+from app.metrics.latency import ModelConfig, record_samples, run_metrics
 from app.rag.ollama_client import OllamaClient, OllamaError
 from app.rag.pipeline import run_query
 from app.trust_engine import scrub
@@ -117,8 +117,9 @@ def query(
     Per-stage timings are stored in latency_samples under `run_id`.
     """
     request_id = uuid.uuid4()
+    settings = get_settings()
     try:
-        result = run_query(body.question, client=client, conn=conn, settings=get_settings(), top_k=body.top_k)
+        result = run_query(body.question, client=client, conn=conn, settings=settings, top_k=body.top_k)
     except OllamaError as exc:
         # Ollama's error text is about the model/server, not the request; still, log the type only.
         logger.error("request %s failed: %s", request_id, type(exc).__name__)
@@ -127,7 +128,8 @@ def query(
     if not result.chunks or result.answer is None:
         raise HTTPException(status_code=503, detail="No documents ingested")
 
-    record_samples(conn, body.run_id, request_id, result.timings_ms)
+    model = ModelConfig(settings.model_backend, settings.llm_model, settings.embed_model)
+    record_samples(conn, body.run_id, request_id, result.timings_ms, model)
     logger.info(
         "request %s run=%s masked=%s refused=%s citations=%d total_ms=%.0f",
         request_id, body.run_id, result.masked_entities or "none", result.refused,

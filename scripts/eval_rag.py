@@ -287,6 +287,8 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    if settings.model_backend == "unknown":
+        print("warning: MODEL_BACKEND is not set (docker or native); the report will say 'unknown'.", file=sys.stderr)
     started_at = datetime.now(timezone.utc)
     load_before = os.getloadavg()
     client = OllamaClient(settings.ollama_base_url)
@@ -302,6 +304,8 @@ def main() -> None:
     finally:
         client.close()
 
+    print(f"Model backend: {settings.model_backend}   LLM: {None if args.retrieve_only else settings.llm_model}"
+          f"   embeddings: {settings.embed_model}")
     print_summary(results, args.retrieve_only)
 
     REPORTS_DIR.mkdir(exist_ok=True)
@@ -313,6 +317,8 @@ def main() -> None:
             "llm_model": None if args.retrieve_only else settings.llm_model,
             "embed_model": settings.embed_model,
             # Container vs native Ollama changes latency a lot; record which one ran.
+            # The URL alone can't tell (both are localhost:11434 from the host).
+            "model_backend": settings.model_backend,
             "ollama_base_url": settings.ollama_base_url,
             "top_k": args.top_k,
             "chunk_size": settings.chunk_size,

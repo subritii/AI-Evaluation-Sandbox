@@ -9,6 +9,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.db.connection import get_connection
 from app.main import app, get_ollama
 
@@ -108,6 +109,24 @@ def test_latency_samples_stored_and_summarized(client, fake_ollama, run_id):
     total = metrics["stages"]["total"]
     assert total["n"] == 3 and total["p50"] <= total["p95"] <= total["p99"] <= total["max"]
     assert any("not reliable" in note for note in metrics["notes"])  # 3 samples is too few for P99
+
+
+def test_latency_samples_record_model_config(client, fake_ollama, run_id):
+    """Every sample names the backend and models, so no percentile is quoted without its configuration."""
+    assert client.post("/query", json={"question": "How long are KYC records kept?", "run_id": run_id}).status_code == 200
+    settings = get_settings()
+    expected = (settings.model_backend, settings.llm_model, settings.embed_model)
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT model_backend, llm_model, embed_model FROM latency_samples WHERE run_id = %s", (run_id,)
+        ).fetchall()
+    assert rows == [expected]
+    # Compose sets MODEL_BACKEND for the backend service; it should never fall back to "unknown" there.
+    assert settings.model_backend in ("docker", "native")
+
+    models = client.get(f"/metrics/{run_id}").json()["models"]
+    assert models == [dict(zip(("model_backend", "llm_model", "embed_model"), expected), requests=1)]
 
 
 def test_metrics_unknown_run_is_404(client):

@@ -61,6 +61,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (cp .env.example .env)}
       POSTGRES_DB: ${POSTGRES_DB:-sandbox}
       OLLAMA_BASE_URL: http://ollama:11434
+      # Recorded with every latency sample; the native override changes it.
+      MODEL_BACKEND: docker
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}

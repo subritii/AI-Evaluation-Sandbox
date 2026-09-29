@@ -6,7 +6,9 @@ batch, every canary is searched for in:
 
   response.masked_question   what the embedding model and LLM actually received
   response.answer / other    what the API returned
-  logs                       backend, ollama, and db container logs for the run
+  logs                       backend, ollama, and db container logs for the run; with
+                             native Ollama, its server log if given (--ollama-log),
+                             otherwise reported as NOT searched
   database                   every text/json column in every public table
 
 A canary found anywhere is a leak. You can't prove a negative, but you can
@@ -130,8 +132,14 @@ def canary_found_in(value: str, haystack: str, haystack_compact: str) -> bool:
     return len(value_compact) >= MIN_COMPACT_LENGTH and value_compact in haystack_compact
 
 
-def collect_logs(since: str) -> dict[str, str]:
-    """Container logs for the run window, per service."""
+def collect_logs(since: str, native_ollama_log: Path | None, native_log_offset: int) -> dict[str, str]:
+    """Logs for the run window, per service.
+
+    Container logs come from `docker compose logs`. With native Ollama the
+    `ollama` container isn't running, so its (empty) container log would look
+    like a clean result; the native server log is read instead, from the byte
+    offset taken when the batch started.
+    """
     logs = {}
     for service in LOG_SERVICES:
         out = subprocess.run(
@@ -139,6 +147,10 @@ def collect_logs(since: str) -> dict[str, str]:
             cwd=REPO_ROOT, capture_output=True, text=True,
         )
         logs[service] = out.stdout + out.stderr
+    if native_ollama_log is not None:
+        with native_ollama_log.open("rb") as f:
+            f.seek(native_log_offset)
+            logs["ollama_native"] = f.read().decode("utf-8", errors="replace")
     return logs
 
 
@@ -230,6 +242,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--api", default=os.environ.get("GATEWAY_URL", "http://localhost:8000"))
     parser.add_argument("--timeout", type=float, default=600.0, help="Per-request timeout (s)")
+    parser.add_argument("--ollama-log", type=Path, default=None,
+                        help="Native Ollama server log to search (e.g. from `ollama serve > file 2>&1`)")
     args = parser.parse_args()
 
     started = datetime.now(timezone.utc)
@@ -245,6 +259,7 @@ def main() -> None:
     run_batch(args.api, warmup, f"{run_id}-warmup", args.timeout)
 
     since = datetime.now(timezone.utc).isoformat()
+    native_log_offset = args.ollama_log.stat().st_size if args.ollama_log else 0
     print(f"Batch: {len(batch)} requests, run_id {run_id}")
     t0 = time.perf_counter()
     responses = run_batch(args.api, batch, run_id, args.timeout)
@@ -254,9 +269,19 @@ def main() -> None:
     with httpx.Client(base_url=args.api, timeout=30) as http:
         metrics_resp = http.get(f"/metrics/{run_id}")
     metrics = metrics_resp.json() if metrics_resp.status_code == 200 else None
+    # The gateway records its own backend and models with each sample; trust that
+    # over this script's environment, which may differ from the gateway's.
+    models = (metrics or {}).get("models", [])
+    backends = {m["model_backend"] for m in models}
 
     db_text = collect_database_text()
-    findings = scan(batch, responses, collect_logs(since), db_text)
+    logs = collect_logs(since, args.ollama_log, native_log_offset)
+    not_searched = []
+    if "native" in backends:
+        logs.pop("ollama")  # the stopped container's log says nothing about native Ollama
+        if args.ollama_log is None:
+            not_searched.append("native Ollama server log (no --ollama-log given)")
+    findings = scan(batch, responses, logs, db_text)
 
     planted = [c for item in batch for c in item["canaries"]]
     planted_by_type = Counter(c["entity_type"] for c in planted)
@@ -269,6 +294,9 @@ def main() -> None:
 
     if metrics:
         print_latency(metrics)
+    for m in models:
+        print(f"Model config (from gateway): backend={m['model_backend']} llm={m['llm_model']} "
+              f"embed={m['embed_model']} ({m['requests']} requests)")
     print(f"\nRequests: {dict(status_counts)}   wall time {wall_s / 60:.1f} min   "
           f"host load avg (1m) {load_before[0]:.1f} -> {load_after[0]:.1f}")
     print(f"\nCanaries planted: {len(planted)} in {sum(bool(i['canaries']) for i in batch)} requests (synthetic)")
@@ -278,11 +306,13 @@ def main() -> None:
         print(f"  {entity:<20} {n:>8} {leaked_by_type.get(entity, 0):>6}")
     print("  by location:")
     all_locations = ["response.masked_question", "response.answer", "response.other_fields"] + \
-        [f"logs.{s}" for s in LOG_SERVICES] + ["database (all text columns)"]
+        [f"logs.{s}" for s in logs] + ["database (all text columns)"]
     db_hits = sum(sum(c.values()) for loc, c in by_location.items() if loc.startswith("database."))
     for loc in all_locations:
         hits = db_hits if loc.startswith("database") else sum(by_location.get(loc, Counter()).values())
         print(f"    {loc:<28} {hits}")
+    for item in not_searched:
+        print(f"    NOT searched: {item}")
 
     REPORTS_DIR.mkdir(exist_ok=True)
     out_path = REPORTS_DIR / f"canary_audit_{started.strftime('%Y%m%d-%H%M%S')}.json"
@@ -295,13 +325,15 @@ def main() -> None:
                    "seed": args.seed, "api": args.api},
         "environment": {"host_load_avg_before": load_before, "host_load_avg_after": load_after,
                         "wall_time_s": round(wall_s, 1)},
+        "model_config": models,
         "status_counts": dict(status_counts),
         "latency": metrics,
         "planted": {"total": len(planted), "by_entity": dict(planted_by_type)},
         "found": {"total": len(leaked_keys), "by_entity": dict(leaked_by_type),
                   "by_location": {k: dict(v) for k, v in sorted(by_location.items())}},
         "searched_locations": {"responses": ["masked_question", "answer", "other_fields"],
-                               "logs": list(LOG_SERVICES), "database_columns": sorted(db_text)},
+                               "logs": sorted(logs), "database_columns": sorted(db_text)},
+        "not_searched": not_searched,
         "findings": findings,
         "requests": [{**item, "status": r["status"],
                       "masked_entities": (r["body"] or {}).get("masked_entities")} for item, r in zip(batch, responses)],

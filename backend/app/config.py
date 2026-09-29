@@ -6,6 +6,7 @@ the defaults here target localhost for running scripts directly on the host.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +23,12 @@ class Settings(BaseSettings):
 
     # Ollama (the only model endpoint; no cloud APIs).
     ollama_base_url: str = "http://localhost:11434"
+    # Which Ollama runtime serves the models: "docker" (the container; CPU-only
+    # on macOS) or "native" (Ollama on the host; Apple GPU). Latency differs by
+    # an order of magnitude, so every measurement records it. The URL can't tell
+    # them apart (both answer on localhost:11434 from the host), so each compose
+    # file sets it and host-run scripts must set it; unset stays "unknown".
+    model_backend: Literal["docker", "native", "unknown"] = "unknown"
     embed_model: str = "nomic-embed-text"
     llm_model: str = "llama3.2:3b"
     # 0 = greedy decoding: the same question and context give the same answer,
