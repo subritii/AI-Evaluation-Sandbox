@@ -19,7 +19,11 @@ All canaries are SYNTHETIC (Faker, fixed seed) and the run is labeled as a
 canary run (run_id "canary-..."). Warmup requests use "<run_id>-warmup" and are
 excluded from the metrics.
 
-Usage (gateway up: docker compose up -d):
+Runs on the host: it reaches the gateway through the proxy (localhost:8000)
+and reads logs and the database through `docker compose`, so the isolated
+network needs no extra ports.
+
+Usage (stack up: docker compose up -d):
     .venv/bin/python scripts/canary_audit.py                  # 200 requests
     .venv/bin/python scripts/canary_audit.py --requests 20    # quick check
 
@@ -39,13 +43,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-import psycopg
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "backend"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from app.config import get_settings  # noqa: E402
 from generate_dataset import Values  # noqa: E402
 
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -154,24 +155,37 @@ def collect_logs(since: str, native_ollama_log: Path | None, native_log_offset: 
     return logs
 
 
+def _psql(sql: str) -> str:
+    """Run SQL with psql inside the db container and return unaligned output.
+
+    The DB has no host port (it lives on the isolated network), so the audit
+    reads it through `docker compose exec`, like the logs.
+    """
+    out = subprocess.run(
+        ["docker", "compose", "exec", "-T", "db", "sh", "-c",
+         'psql -X -q -A -t -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'],
+        cwd=REPO_ROOT, input=sql, capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"psql failed: {out.stderr.strip()[:300]}")
+    return out.stdout
+
+
 def collect_database_text() -> dict[str, str]:
     """Every text-like column in every public table, as one string per table.column."""
-    settings = get_settings()
+    catalog = _psql(
+        """
+        SELECT table_name || '.' || column_name FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND data_type IN ('text', 'character varying', 'character', 'json', 'jsonb', 'uuid')
+        ORDER BY table_name, column_name;
+        """
+    )
     columns: dict[str, str] = {}
-    with psycopg.connect(settings.database_url) as conn:
-        rows = conn.execute(
-            """
-            SELECT table_name, column_name FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND data_type IN ('text', 'character varying', 'character', 'json', 'jsonb', 'uuid')
-            ORDER BY table_name, column_name
-            """
-        ).fetchall()
-        for table, column in rows:
-            values = conn.execute(
-                f'SELECT "{column}"::text FROM "{table}" WHERE "{column}" IS NOT NULL'  # names from the catalog
-            ).fetchall()
-            columns[f"{table}.{column}"] = "\n".join(v[0] for v in values)
+    for name in catalog.split():
+        table, column = name.split(".", 1)
+        # Names come from the catalog, not from input.
+        columns[name] = _psql(f'SELECT "{column}"::text FROM "{table}" WHERE "{column}" IS NOT NULL;')
     return columns
 
 

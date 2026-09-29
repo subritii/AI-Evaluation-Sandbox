@@ -2,7 +2,11 @@
 # One-time model download into the `ollama_models` volume.
 # This is the ONLY step that needs internet access; after it, the sandbox runs offline.
 #
-# Usage: docker compose up -d db ollama && ./scripts/pull_models.sh
+# The running `ollama` container sits on the isolated `sandbox` network and
+# can't download anything, so the pull runs in a separate one-off container
+# (`ollama-pull`, profile `setup`) on its own network, sharing the model volume.
+#
+# Usage: ./scripts/pull_models.sh
 #        ./scripts/pull_models.sh --native   # dev option: pull into native Ollama on the Mac
 set -euo pipefail
 
@@ -26,15 +30,5 @@ if [[ "${1:-}" == "--native" ]]; then
   exit 0
 fi
 
-if ! docker compose ps --status running --services | grep -qx ollama; then
-  echo "Ollama container is not running. Start it first: docker compose up -d db ollama" >&2
-  exit 1
-fi
-
-for model in "$EMBED_MODEL" "$LLM_MODEL"; do
-  echo "==> Pulling $model"
-  docker compose exec ollama ollama pull "$model"
-done
-
-echo "==> Models available in the ollama_models volume:"
-docker compose exec ollama ollama list
+echo "==> Pulling $EMBED_MODEL and $LLM_MODEL into the ollama_models volume (setup network)"
+docker compose --profile setup run --rm ollama-pull

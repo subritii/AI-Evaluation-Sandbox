@@ -13,4 +13,8 @@ ENV PYTHONPATH=/code \
     PYTHONUNBUFFERED=1 \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
+# Run as an unprivileged user.
+RUN useradd --create-home --uid 10001 app
+USER app
+
 CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]

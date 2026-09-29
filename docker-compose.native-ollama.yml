@@ -2,27 +2,50 @@
 # `ollama` container. Docker on macOS can't use the Apple GPU, so the container
 # generates on CPU; native Ollama uses Metal and is much faster.
 #
-# NOT the default. The offline demo and every reported benchmark use the
-# all-Docker setup in docker-compose.yml. Eval reports record the Ollama URL,
-# so runs against native Ollama are distinguishable.
+# NOT ISOLATED. Containers on the `internal: true` sandbox network can't reach
+# the host, so backend, ingest, and tools also join `edge` here to reach
+# host.docker.internal, which gives them a route to the internet too.
+# scripts/airgap_check.py reports this configuration as not isolated. Use the
+# all-Docker default for the offline demo and the air-gap proof. Every report
+# and latency sample records model_backend=native for runs made this way.
 #
 # Usage (see README "Dev option: native Ollama on macOS"):
-#   docker compose stop ollama          # frees port 11434 for native Ollama
 #   ollama serve                        # or open the Ollama app
-#   docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml run --rm backend ...
+#   docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml up -d
 # Or set COMPOSE_FILE in .env to make it the default for your shell (see .env.example).
 
+x-native-env: &native-env
+  OLLAMA_BASE_URL: http://host.docker.internal:11434
+  MODEL_BACKEND: native
+
+x-native-host: &native-host
+  # Docker Desktop resolves host.docker.internal already; this keeps it
+  # working on Linux Docker Engine too.
+  - "host.docker.internal:host-gateway"
+
 services:
+  # Not needed: native Ollama replaces it. The profile keeps `up` from starting it.
+  ollama:
+    profiles: [docker-ollama]
+
+  ingest:
+    environment: *native-env
+    extra_hosts: *native-host
+    networks: [sandbox, edge]
+    # Replace (not merge) depends_on so the `ollama` container isn't required.
+    depends_on: !override
+      db:
+        condition: service_healthy
+
   backend:
-    environment:
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
-      MODEL_BACKEND: native
-    extra_hosts:
-      # Docker Desktop resolves host.docker.internal already; this keeps it
-      # working on Linux Docker Engine too.
-      - "host.docker.internal:host-gateway"
-    # Replace (not merge) the base depends_on so the `ollama` container
-    # isn't started. Requires Compose v2.24.4+.
+    environment: *native-env
+    extra_hosts: *native-host
+    networks: [sandbox, edge]
+
+  tools:
+    environment: *native-env
+    extra_hosts: *native-host
+    networks: [sandbox, edge]
     depends_on: !override
       db:
         condition: service_healthy

@@ -1,22 +1,55 @@
 # Secure Enterprise AI Evaluation Sandbox
 #
-# Services: Postgres + pgvector (vector store), Ollama (local models), the
-# FastAPI gateway (`backend`, also used for one-off ingest/test commands), and
-# the Streamlit dashboard.
-# Task 8 moves everything onto an `internal: true` network for the air-gap proof.
+# One-command start (after the one-time ./scripts/pull_models.sh):
+#   docker compose up -d        -> dashboard http://localhost:8501, API http://localhost:8000
+#
+# Network isolation (Task 8). Every service that touches data runs on
+# `sandbox`, an `internal: true` network: Docker gives it no route out and no
+# DNS for outside names, so db, ollama, ingest, backend, dashboard, and tools
+# can reach each other and nothing else. Internal networks can't publish ports
+# to the host, so one nginx `proxy` joins both `sandbox` and `edge` and
+# publishes only the dashboard and API, on loopback. The proxy is the only
+# container with a route out; it runs a static config, unprivileged and
+# read-only. scripts/airgap_check.py tests all of this and saves a report.
+#
+# The only step that needs the internet is the model pull, done by the
+# `ollama-pull` service (profile `setup`) on its own `setup` network.
 name: ai-eval-sandbox
+
+x-backend-env: &backend-env
+  # Inside Compose, reach services by name, not localhost.
+  POSTGRES_HOST: db
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: ${POSTGRES_USER:-sandbox}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (cp .env.example .env)}
+  POSTGRES_DB: ${POSTGRES_DB:-sandbox}
+  OLLAMA_BASE_URL: http://ollama:11434
+  # Recorded with every latency sample and report; the native override changes it.
+  MODEL_BACKEND: docker
+  EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+  LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+  LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
+  LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-256}
+  POLICIES_DIR: /data/policies
+
+# Pinned by digest to the exact images tested (tag shown for readability).
+x-ollama-image: &ollama-image ollama/ollama:0.34.4@sha256:8262851b2846b87c649eddf3e76beb270c52f4d1bc94559f47efde16b0841551
+
+networks:
+  sandbox:
+    internal: true
+  edge: {}
+  setup: {}
 
 services:
   db:
     image: pgvector/pgvector:pg16
+    networks: [sandbox]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sandbox}
       # Required: fail fast rather than fall back to a committed default password.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (cp .env.example .env)}
       POSTGRES_DB: ${POSTGRES_DB:-sandbox}
-    ports:
-      # Bound to loopback only, so the DB is reachable from this machine but not the LAN.
-      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -26,12 +59,10 @@ services:
       retries: 12
 
   ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434"
+    image: *ollama-image
+    networks: [sandbox]
     volumes:
-      # Model weights live here so they survive container restarts and are
-      # pulled only once (the one allowed network step).
+      # Model weights, filled once by `ollama-pull` (the one allowed network step).
       - ollama_models:/root/.ollama
     environment:
       # Keep models loaded between requests so latency numbers aren't
@@ -43,32 +74,50 @@ services:
       timeout: 5s
       retries: 12
 
+  # One-time setup: `./scripts/pull_models.sh` runs this. It is the only
+  # container that downloads anything, on its own network, and it exits.
+  ollama-pull:
+    image: *ollama-image
+    profiles: [setup]
+    networks: [setup]
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve >/tmp/serve.log 2>&1 &
+        for i in $$(seq 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done
+        ollama pull "$$EMBED_MODEL" && ollama pull "$$LLM_MODEL" && ollama list
+
+  # Embeds the policy documents (idempotent: replaces each source's chunks),
+  # then exits; the backend starts after it succeeds.
+  ingest:
+    build: ./backend
+    networks: [sandbox]
+    command: ["python", "-m", "app.rag.ingest"]
+    environment: *backend-env
+    volumes:
+      - ./backend/app:/code/app
+      - ./data:/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
   backend:
     build: ./backend
-    ports:
-      # Loopback only, like the other services.
-      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    networks: [sandbox]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
-    environment:
-      # Inside Compose, reach services by name, not localhost.
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-sandbox}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (cp .env.example .env)}
-      POSTGRES_DB: ${POSTGRES_DB:-sandbox}
-      OLLAMA_BASE_URL: http://ollama:11434
-      # Recorded with every latency sample; the native override changes it.
-      MODEL_BACKEND: docker
-      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
-      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
-      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
-      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-256}
-      POLICIES_DIR: /data/policies
+    environment: *backend-env
     volumes:
       # Mount source so code edits don't need an image rebuild.
       - ./backend/app:/code/app
@@ -77,13 +126,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
+      ingest:
+        condition: service_completed_successfully
 
   dashboard:
     build: ./dashboard
-    ports:
-      - "127.0.0.1:${DASHBOARD_HOST_PORT:-8501}:8501"
+    networks: [sandbox]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
       interval: 10s
@@ -102,6 +150,52 @@ services:
       - ./data/sample_batches:/data/sample_batches:ro
     depends_on:
       backend:
+        condition: service_healthy
+
+  # The only way in from the host, and the only container on a network with a
+  # route out. Static config, no scripts, unprivileged, read-only filesystem.
+  proxy:
+    image: nginxinc/nginx-unprivileged:1.31.6-alpine@sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af
+    networks: [sandbox, edge]
+    ports:
+      # Loopback only: reachable from this machine, not the LAN.
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-8501}:8501"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    depends_on:
+      backend:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+
+  # Evaluation scripts inside the isolated network (the host can't reach the
+  # DB or Ollama any more). Mounts the repo read-only, reports read-write:
+  #   docker compose run --rm tools python scripts/eval_rag.py
+  tools:
+    build:
+      context: ./backend
+      target: tools
+    profiles: [tools]
+    networks: [sandbox]
+    working_dir: /repo
+    environment: *backend-env
+    volumes:
+      - .:/repo:ro
+      - ./reports:/repo/reports
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
 
 volumes:
