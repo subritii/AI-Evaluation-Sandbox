@@ -312,6 +312,8 @@ def main() -> None:
         "config": {
             "llm_model": None if args.retrieve_only else settings.llm_model,
             "embed_model": settings.embed_model,
+            # Container vs native Ollama changes latency a lot; record which one ran.
+            "ollama_base_url": settings.ollama_base_url,
             "top_k": args.top_k,
             "chunk_size": settings.chunk_size,
             "chunk_overlap": settings.chunk_overlap,

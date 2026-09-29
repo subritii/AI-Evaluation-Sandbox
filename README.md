@@ -111,11 +111,24 @@ docker compose up -d
 
 After step 3, the sandbox needs no internet access. To prove it, disconnect and run a full evaluation.
 
+### Dev option: native Ollama on macOS
+
+Docker on macOS can't use the Apple GPU, so the `ollama` container generates on CPU (tens of seconds per answer). For faster iteration you can run Ollama natively and point the backend at it. **All-Docker remains the default** and is what the offline demo and reported benchmarks use.
+
+```bash
+docker compose stop ollama                 # free port 11434
+ollama serve                               # or open the Ollama app
+./scripts/pull_models.sh --native          # native Ollama has its own model store
+docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml run --rm backend python -m app.rag.ingest
+```
+
+Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://localhost:11434` and reach whichever Ollama holds that port. Re-ingest after switching so stored and query embeddings come from the same runtime. Eval reports record the Ollama URL used.
+
 ## Build Roadmap
 
 **Core**
 
-- [ ] **Task 1: Local infrastructure + RAG.** Compose with Postgres/pgvector and Ollama; ingest a mock policy PDF; answer questions offline.
+- [x] **Task 1: Local infrastructure + RAG.** Compose with Postgres/pgvector and Ollama; ingest a mock policy PDF; answer questions offline.
 - [ ] **Task 2: Trust Engine.** Presidio with custom recognizers (routing numbers, IBAN, Luhn-validated cards, context-based account numbers); typed placeholders; scrub before embedding; no raw PII in logs.
 - [ ] **Task 4: Gateway + latency.** FastAPI `/query` endpoint; per-stage timers; samples stored in Postgres; percentile calculations.
 - [ ] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.

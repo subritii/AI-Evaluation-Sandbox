@@ -1,0 +1,27 @@
+# DEV OPTION (macOS): use Ollama running natively on the Mac instead of the
+# `ollama` container. Docker on macOS can't use the Apple GPU, so the container
+# generates on CPU; native Ollama uses Metal and is much faster.
+#
+# NOT the default. The offline demo and every reported benchmark use the
+# all-Docker setup in docker-compose.yml. Eval reports record the Ollama URL,
+# so runs against native Ollama are distinguishable.
+#
+# Usage (see README "Dev option: native Ollama on macOS"):
+#   docker compose stop ollama          # frees port 11434 for native Ollama
+#   ollama serve                        # or open the Ollama app
+#   docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml run --rm backend ...
+# Or set COMPOSE_FILE in .env to make it the default for your shell (see .env.example).
+
+services:
+  backend:
+    environment:
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      # Docker Desktop resolves host.docker.internal already; this keeps it
+      # working on Linux Docker Engine too.
+      - "host.docker.internal:host-gateway"
+    # Replace (not merge) the base depends_on so the `ollama` container
+    # isn't started. Requires Compose v2.24.4+.
+    depends_on: !override
+      db:
+        condition: service_healthy
