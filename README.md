@@ -130,8 +130,8 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 
 - [x] **Task 1: Local infrastructure + RAG.** Compose with Postgres/pgvector and Ollama; ingest a mock policy PDF; answer questions offline.
 - [x] **Task 2: Trust Engine.** Presidio with custom recognizers (routing numbers, IBAN, Luhn-validated cards, context-based account numbers); typed placeholders; scrub before embedding; no raw PII in logs.
-- [ ] **Task 4: Gateway + latency.** FastAPI `/query` endpoint; per-stage timers; samples stored in Postgres; percentile calculations.
-- [ ] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.
+- [x] **Task 4: Gateway + latency.** FastAPI `/query` endpoint; per-stage timers; samples stored in Postgres; percentile calculations.
+- [x] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.
 - [ ] **Task 7: Dashboard + report.** Streamlit upload, live latency chart, results panel, downloadable report with methodology.
 - [ ] **Task 8: Packaging + air-gap proof.** Dockerfiles, `internal: true` network, one-command start.
 

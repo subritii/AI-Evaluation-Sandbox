@@ -54,4 +54,4 @@ docker compose logs -f backend          # backend logs
 
 ## Current focus
 
-Update this line as work progresses: **Tasks 1-2 done (+ lean Task 3). Next: code-attached citations with a citation-accuracy check, then Task 4.**
+Update this line as work progresses: **Tasks 1-4 and 6 done (gateway, per-stage latency, code-attached citations, canary audit; results so far measured on native Ollama). Next: Task 7 (dashboard + report), then Task 8 (packaging + air-gap proof); benchmark the all-Docker configuration for comparison.**
