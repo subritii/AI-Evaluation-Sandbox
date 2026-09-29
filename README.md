@@ -113,7 +113,7 @@ After step 3, the sandbox needs no internet access. To prove it, disconnect and 
 
 ### Dev option: native Ollama on macOS
 
-Docker on macOS can't use the Apple GPU, so the `ollama` container generates on CPU (tens of seconds per answer). For faster iteration you can run Ollama natively and point the backend at it. **All-Docker remains the default** and is what the offline demo and reported benchmarks use.
+Docker on macOS can't use the Apple GPU, so the `ollama` container generates on CPU (tens of seconds per answer). For faster iteration you can run Ollama natively and point the backend at it. **All-Docker remains the default** and is what the offline demo uses. Results measured with native Ollama are labeled as such, and every report and latency sample records `model_backend` (`docker` or `native`) and the model names.
 
 ```bash
 docker compose stop ollama                 # free port 11434
@@ -122,7 +122,7 @@ ollama serve                               # or open the Ollama app
 docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml run --rm backend python -m app.rag.ingest
 ```
 
-Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://localhost:11434` and reach whichever Ollama holds that port. Re-ingest after switching so stored and query embeddings come from the same runtime. Eval reports record the Ollama URL used.
+Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://localhost:11434` and reach whichever Ollama holds that port, so set `MODEL_BACKEND=native` (or `docker`) for them; the URL alone can't tell the two apart. Re-ingest after switching so stored and query embeddings come from the same runtime.
 
 ## Build Roadmap
 
@@ -144,15 +144,16 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 
 ## Results
 
-*Filled in only from real, reproducible runs.*
+*Filled in only from real, reproducible runs. Latency rows are labeled with their configuration: **native Ollama** = the macOS dev option (Apple GPU), not the all-Docker CPU setup. Details and per-entity tables in `docs/build-log.md`.*
 
 | Metric | Result | How to reproduce |
 |---|---|---|
 | PII detector recall (overall) | 89.1% (precision 99.8%) on 1,000 synthetic records; per-entity table in `docs/build-log.md` | `python scripts/generate_dataset.py && python scripts/eval_detector.py` |
-| Canary leakage | — | `python scripts/canary_audit.py` |
+| Canary leakage | 50/207 synthetic canaries found, all in the masked question sent to the models (Trust Engine misses: bare digits without context, rare card formats, some names); 0 in answers, container logs, or database. Native Ollama server log not searched. (**native Ollama** run, n=200) | `python scripts/canary_audit.py` |
 | Cross-tenant retrievals | — | `python scripts/isolation_test.py` |
-| Security layer latency (P95) | — | Dashboard batch run |
-| End-to-end latency (P95) | — | Dashboard batch run |
+| Security layer latency (P95) | 126 ms PII scan (P50 35 ms, P99 307 ms), n=200, **native Ollama**, llama3.2:3b | `python scripts/canary_audit.py` |
+| End-to-end latency (P95) | 3,590 ms (P50 1,734 ms), n=200, **native Ollama**, llama3.2:3b | `python scripts/canary_audit.py` |
+| RAG answers / citations | 9/9 correct, 2/2 refusals, evidence cited 9/9 (11 questions, **native Ollama**, llama3.2:3b) | `MODEL_BACKEND=native python scripts/eval_rag.py` |
 
 ## Design Decisions
 

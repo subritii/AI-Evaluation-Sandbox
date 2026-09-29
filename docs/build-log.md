@@ -173,3 +173,86 @@ over-masks.
 - **`scrubbed_by` names the exact scrubber**
   (`presidio-2.2.364+en_core_web_lg-3.8.0+rules-v1`). After re-ingest, all 19
   rows carry it and none say `passthrough-stub`.
+
+---
+
+## Task 4 + Task 6: Gateway latency and canary audit (native-Ollama configuration)
+
+**Configuration for every number in this section: native Ollama 0.34.4 on the
+Mac (Apple GPU), llama3.2:3b + nomic-embed-text, temperature 0, top_k=4, 19
+chunks re-ingested through native Ollama.** This is the dev option, not the
+all-Docker demo setup. Docker Ollama on macOS runs on CPU, so these latencies do
+**not** describe the all-Docker configuration. Both reports and every
+`latency_samples` row record `model_backend=native` and the model names (commit
+`6e7b5cb`). Host load average (1 min) was 5-11 on 8 CPUs during the runs, since
+other work was running on the machine; each report records it.
+
+### RAG eval baseline (commit `6e7b5cb`)
+
+`MODEL_BACKEND=native .venv/bin/python scripts/eval_rag.py` →
+`reports/eval_rag_20260929-195959.json`
+
+| Metric | Result |
+|---|---|
+| Expected chunk retrieved in top 4 | 9/9 (8 at rank 1) |
+| Correct answers (keywords present, no hedging) | 9/9 |
+| Correct refusals | 2/2 |
+| Evidence chunk cited (code-attached citations) | 9/9, mean citation precision 100% |
+| Refusals citing nothing | 2/2 |
+| Total time per question | 1.8 s to 8.3 s |
+
+The Task 1 baseline was 7/9. Two things changed since then: the system prompt
+was rewritten in `b85875d`, and the runtime moved from Docker to native Ollama.
+The gain can't be credited to either one without a Docker run at this commit.
+With 11 questions, the per-stage percentiles here aren't meaningful. The first
+question's `pii_scan` (3,035 ms) also includes loading the Trust Engine,
+because `eval_rag.py` has no warmup, unlike the gateway.
+
+### Per-stage latency, 200-request canary batch
+
+`.venv/bin/python scripts/canary_audit.py` (200 requests, 3 warmups excluded,
+seed 2026) → `reports/canary_audit_20260929-200203.json`, run
+`canary-20260929-200203`. All 200 returned 200 OK in 6.8 min.
+
+| Stage (ms) | avg | P50 | P90 | P95 | P99 |
+|---|---|---|---|---|---|
+| **pii_scan** (Trust Engine) | 53 | 35 | 73 | **126** | 307 |
+| retrieval (embed + pgvector) | 64 | 55 | 108 | 136 | 185 |
+| time_to_first_token | 627 | 293 | 1,536 | 1,640 | 2,409 |
+| generation | 1,224 | 1,220 | 2,019 | 2,234 | 2,505 |
+| **total** | 1,970 | 1,734 | 3,259 | **3,590** | 3,991 |
+
+The PII scan is 3.5% of end-to-end time at P95 (126 of 3,590 ms). At
+n=200, each P99 rests on about 2 requests, so treat it as indicative.
+
+### Canary leakage: 50/207 planted canaries found, all in `masked_question`
+
+207 synthetic canaries in 106 of the 200 requests. The canaries were found
+**only** in `masked_question`, the text sent to the embedding model and the LLM.
+That means the Trust Engine failed to mask them. Nothing was found in answers,
+other response fields, backend or db container logs, or any text column in the
+database.
+
+| Entity | Planted | Found | Where the misses come from |
+|---|---|---|---|
+| US_ROUTING_NUMBER | 37 | 17 | all 17 from `no_context_wire` (bare digits); 0/20 with context |
+| ACCOUNT_NUMBER | 37 | 17 | all 17 from `no_context_wire`; 0/20 with context |
+| PERSON | 51 | 9 | 5 in `no_context_wire`; 4 others, mostly non-English names |
+| CREDIT_CARD | 18 | 7 | 12-digit Maestro, 19-digit Visa, 2-series Mastercard, 15-digit JCB |
+| US_SSN | 21 | 0 | |
+| IBAN_CODE | 17 | 0 | |
+| EMAIL_ADDRESS | 13 | 0 | |
+| PHONE_NUMBER | 13 | 0 | |
+
+Every miss matches a limitation listed under Task 2, "Where recall is lost."
+Leaving out the deliberately hard `no_context_wire` template, 11 of 156
+canaries were found (7%).
+
+**Not searched:** the native Ollama server log. `ollama serve` was writing to a
+terminal, not a file, and the stopped Ollama container's log says nothing about
+native Ollama. The report lists this under `not_searched`. To close the gap,
+run `ollama serve > ollama.log 2>&1` and pass `--ollama-log ollama.log`.
+
+A 20-request smoke test ran first (`reports/canary_audit_20260929-195550.json`,
+6/21 found, same pattern). Its latency rows predate the model-config columns
+and are stored as `unknown`.
