@@ -73,7 +73,9 @@ flowchart LR
 │   ├── generate_dataset.py    # Faker-based labeled PII dataset
 │   ├── eval_detector.py       # Precision / recall per entity
 │   ├── canary_audit.py        # Leakage audit
+│   ├── airgap_check.py        # Proves the running stack has no route out
 │   └── isolation_test.py      # Cross-tenant adversarial queries
+├── proxy/nginx.conf           # Ingress proxy: the only way in from the host
 ├── reports/                   # Generated reports (gitignored)
 └── docs/
     ├── architecture.md
@@ -88,29 +90,53 @@ flowchart LR
 - 16 GB RAM recommended (8 GB minimum with a smaller model)
 - ~10 GB free disk space for model weights
 - Optional: NVIDIA GPU for faster generation
-- Python 3.11+ for running scripts outside containers
+- Python 3.11+ with a `.venv` for the host-side scripts (`airgap_check.py`, `canary_audit.py`, `eval_detector.py`)
 
 ## Quickstart
 
 ```bash
-# 1. Clone and configure
+# 1. Clone and configure (set POSTGRES_PASSWORD)
 git clone <your-repo-url> && cd <repo>
 cp .env.example .env
 
-# 2. Start the database and model server
-docker compose up -d db ollama
-
-# 3. Pull models (requires internet, one time only)
+# 2. Pull models (requires internet, one time only; runs in a separate setup container)
 ./scripts/pull_models.sh
 
-# 4. Ingest mock policy documents
-docker compose run --rm backend python -m app.rag.ingest
-
-# 5. Start everything
+# 3. Start everything: one command. Ingests the policies, then starts the gateway,
+#    dashboard, and proxy on an isolated network.
 docker compose up -d
 
 # Dashboard: http://localhost:8501
 # API docs:  http://localhost:8000/docs
+
+# 4. Prove the running stack can't reach the internet (and still answers)
+.venv/bin/python scripts/airgap_check.py
+```
+
+### Network isolation
+
+Every container that handles data (db, ollama, ingest, backend, dashboard,
+tools) runs on an `internal: true` Docker network: no route out, no DNS for
+outside names. Docker can't publish ports from an internal network, so one
+nginx proxy joins it and an `edge` network and publishes only the dashboard
+and API, on `127.0.0.1`. The proxy is the only container with a route out; it
+holds no data and runs a static config, unprivileged, with a read-only
+filesystem. The DB and Ollama have no host ports.
+
+`scripts/airgap_check.py` tests this and saves a report the dashboard cites:
+container networks and ports, egress probes (public IPs, DNS, the Ollama
+registry) from inside containers and from the network, a **control** probe on
+a normal network that must connect (otherwise the verdict is INCONCLUSIVE,
+since "blocked" could mean the machine is offline), internal reachability,
+ingress, the proxy's own route out (reported, not hidden), and a real query.
+
+Scripts that need the DB or Ollama run inside the isolated network:
+
+```bash
+docker compose run --rm tools python scripts/eval_rag.py      # RAG eval
+.venv/bin/python scripts/canary_audit.py                      # host: API via proxy, DB and logs via docker compose
+.venv/bin/python scripts/eval_detector.py                     # host: needs no services
+docker compose run --rm backend pytest                        # tests
 ```
 
 ### Dashboard
@@ -124,20 +150,21 @@ saved; runs are stored in `reports/` as counts and timings only. The same batch
 runs without the UI:
 `docker compose run --rm dashboard python batch.py /data/sample_batches/policy_questions.jsonl`.
 
-After step 3, the sandbox needs no internet access. To prove it, disconnect and run a full evaluation.
+After step 2, the sandbox needs no internet access.
 
 ### Dev option: native Ollama on macOS
 
-Docker on macOS can't use the Apple GPU, so the `ollama` container generates on CPU (tens of seconds per answer). For faster iteration you can run Ollama natively and point the backend at it. **All-Docker remains the default** and is what the offline demo uses. Results measured with native Ollama are labeled as such, and every report and latency sample records `model_backend` (`docker` or `native`) and the model names.
+Docker on macOS can't use the Apple GPU, so the `ollama` container generates on CPU (7-45 s per answer in the all-Docker eval). For faster iteration you can run Ollama natively and point the backend at it. **All-Docker remains the default** and is what the offline demo and air-gap proof use. Every report and latency sample records `model_backend` (`docker` or `native`) and the model names.
+
+**The native option is not network-isolated.** Containers on the internal network can't reach the host, so the override also puts backend, ingest, and tools on the `edge` network, which gives them a route out; `airgap_check.py` reports FAIL for it.
 
 ```bash
-docker compose stop ollama                 # free port 11434
 ollama serve                               # or open the Ollama app
 ./scripts/pull_models.sh --native          # native Ollama has its own model store
-docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml run --rm backend python -m app.rag.ingest
+docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml up -d   # re-ingests via native Ollama
 ```
 
-Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://localhost:11434` and reach whichever Ollama holds that port, so set `MODEL_BACKEND=native` (or `docker`) for them; the URL alone can't tell the two apart. Re-ingest after switching so stored and query embeddings come from the same runtime.
+Ingest runs on every start, so stored and query embeddings always come from the same runtime.
 
 ## Build Roadmap
 
@@ -148,7 +175,7 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 - [x] **Task 4: Gateway + latency.** FastAPI `/query` endpoint; per-stage timers; samples stored in Postgres; percentile calculations.
 - [x] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.
 - [x] **Task 7: Dashboard + report.** Streamlit upload, live latency chart, results panel, downloadable report with methodology.
-- [ ] **Task 8: Packaging + air-gap proof.** Dockerfiles, `internal: true` network, one-command start.
+- [x] **Task 8: Packaging + air-gap proof.** Dockerfiles, `internal: true` network, one-command start.
 
 **Stretch**
 
@@ -159,16 +186,18 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 
 ## Results
 
-*Filled in only from real, reproducible runs. Latency rows are labeled with their configuration: **native Ollama** = the macOS dev option (Apple GPU), not the all-Docker CPU setup. Details and per-entity tables in `docs/build-log.md`.*
+*Filled in only from real, reproducible runs. Every latency number names its configuration and sample size: **native** = the macOS dev option (native Ollama, Apple GPU); **all-Docker** = the isolated default (Ollama container on CPU). Details and per-entity tables in `docs/build-log.md`.*
 
 | Metric | Result | How to reproduce |
 |---|---|---|
+| Network isolation (all-Docker) | **PASS**: every data-handling container had no route out (public IPs, DNS, Ollama registry blocked) while a control probe on a normal network connected, and a real query was answered. The ingress proxy is the one container with a route out. The native-Ollama config correctly reports FAIL. | `python scripts/airgap_check.py` |
 | PII detector recall (overall) | 90.1% (precision 99.8%) on 1,000 synthetic records, rules-v2; per-entity table and before/after in `docs/build-log.md` | `python scripts/generate_dataset.py && python scripts/eval_detector.py` |
-| Canary leakage | 43/207 synthetic canaries found (50 before the card-format fix), all in the masked question sent to the models (Trust Engine misses: bare digits without context, some names); 0 in answers, backend/db logs, native Ollama log, or database. (**native Ollama** run, n=200) | `python scripts/canary_audit.py --ollama-log ollama.log` |
+| Canaries unmasked by the Trust Engine | 43/207 (native, 200 requests; 50 before the card-format fix); 6/21 (all-Docker, 20 requests). All are known gaps: bare digits without context, some names. | `python scripts/canary_audit.py` |
+| Canaries found in answers, logs, or storage | 0/207 (native, including the native Ollama log); 0/21 (all-Docker, including the Ollama container log) | same run |
 | Cross-tenant retrievals | — | `python scripts/isolation_test.py` |
-| Security layer latency (P95) | 92 ms PII scan (P50 34 ms, P99 203 ms), n=200, **native Ollama**, llama3.2:3b; 126 ms in an earlier run under heavier host load | `python scripts/canary_audit.py` |
-| End-to-end latency (P95) | 3,341 ms (P50 1,600 ms), n=200, **native Ollama**, llama3.2:3b; 3,590 ms in an earlier run under heavier host load | `python scripts/canary_audit.py` |
-| RAG answers / citations | 9/9 correct, 2/2 refusals, evidence cited 9/9 (11 questions, **native Ollama**, llama3.2:3b) | `MODEL_BACKEND=native python scripts/eval_rag.py` |
+| Security layer latency (PII scan P95) | 92 ms (native, n=200); 364 ms (all-Docker, n=20, host load 17-29) | `python scripts/canary_audit.py` |
+| End-to-end latency (P95) | 3.3 s (native, n=200); 26.7 s (all-Docker, n=20) | `python scripts/canary_audit.py` |
+| RAG answers / citations | 9/9 correct, 2/2 refusals, evidence cited 9/9 on both native and all-Docker (11 questions, llama3.2:3b) | `docker compose run --rm tools python scripts/eval_rag.py` |
 
 ## Design Decisions
 

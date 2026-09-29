@@ -444,3 +444,133 @@ synthetic PII.
   on refresh).
 - The report's "Known gaps" list is written by hand from this log. The canary
   "not searched" items are the only gaps pulled from run data.
+
+### Report fixes after review (commit `1f9e6cc`)
+
+- **Canary results split in two.** "Found" mixed two different outcomes. Now
+  the tile and section report **unmasked by the Trust Engine** (the value was
+  in the masked question, so the models received it: 43/207 in the native
+  200-request run) separately from **found in answers, logs, or storage**
+  (0/207). Both count distinct canaries, taken from the report's findings.
+- **Headline latency uses the largest run.** The tiles had shown the selected
+  dashboard batch (n=20, so P95 rests on one request). They now use whichever
+  selected run has the most samples, and each tile says n, the run, and the
+  backend. The canary section got its own latency table so the tile's
+  source is in the report.
+- **"Nothing leaves the machine" was an overclaim** before Task 8. It now says
+  no external services are called, and that network isolation is enforced
+  only in the all-Docker configuration. After Task 8 the statement cites the
+  air-gap check report (below).
+- **Detector eval rerun from a clean commit.** The before/after runs above
+  cite `17c3c66-dirty`. The rerun at `1f9e6cc` (clean) →
+  `reports/eval_detector_20260929-212122.json` gives identical numbers
+  (recall 90.1%, precision 99.8%, cards 89/89).
+
+---
+
+## Task 8: Packaging + air-gap proof
+
+### What
+
+- **One-command start.** After the one-time `./scripts/pull_models.sh`,
+  `docker compose up -d` brings up db and ollama, runs a one-shot `ingest`,
+  then starts backend, dashboard, and the proxy (87 s on the first start
+  here).
+- **Isolated network.** db, ollama, ingest, backend, dashboard, and tools run
+  on `sandbox`, an `internal: true` network. A read-only, unprivileged nginx
+  `proxy` joins `sandbox` and `edge` and publishes only
+  `127.0.0.1:8501` (dashboard) and `127.0.0.1:8000` (API). The DB and Ollama
+  have no host ports.
+- **`scripts/airgap_check.py`** proves it and saves
+  `reports/airgap_check_<ts>.json`, which the dashboard and HTML report cite.
+
+**Results, all-Docker (commit `2ef114f` unless noted):**
+
+| Check | Result |
+|---|---|
+| Air-gap check | **PASS**, `reports/airgap_check_20260929-213132.json`; again at `23579ac` → `airgap_check_20260929-214335.json` |
+| Egress from backend, dashboard, and the sandbox network | TCP to 1.1.1.1:443 and 8.8.8.8:53: unreachable. `example.com` and `registry.ollama.ai`: no DNS |
+| Control probe on Docker's default bridge | all four connected / resolved |
+| Internal reachability | db, ollama, backend, dashboard all reachable |
+| Ingress via proxy | dashboard and API HTTP 200 |
+| Proxy's own egress | CONNECTED (reported in the check; see Why) |
+| Real query through the isolated stack | HTTP 200, cited the policy |
+| **Negative test:** native-Ollama override | **FAIL** as expected, `airgap_check_20260929-214307.json`: backend dual-homed and reached all four targets |
+| RAG eval in `tools` (Docker Ollama on CPU) | 9/9 answers, 2/2 refusals, evidence cited 9/9, 100% precision; 7.4-45.3 s per question. `reports/eval_rag_20260929-213200.json` |
+| Canary audit, 20 requests | 6/21 unmasked (same misses as the native smoke test), **0/21 in answers, logs (including the Ollama container log), or storage**. `reports/canary_audit_20260929-213533.json` |
+| Canary latency, all-Docker, n=20 | PII scan P50/P95 100/364 ms; end-to-end P50/P95 15.1/26.7 s. Host load average 28.6 → 17.4 on 8 CPUs, so these are CPU-contended numbers |
+
+Same Ollama version in both configurations (0.34.4), so native vs all-Docker
+differs in runtime and hardware, not model server version. A 200-request
+all-Docker canary run would take about 2 hours on CPU and hasn't been run.
+
+### How
+
+- **Compose:** networks `sandbox` (internal), `edge` (proxy only), and `setup`
+  (model pull only). A shared env anchor for backend, ingest, and tools.
+  Ollama and nginx are pinned by digest to the tested images.
+- **Model pull:** the running `ollama` container can't download anything, so
+  `pull_models.sh` runs `ollama-pull` (profile `setup`), a one-off container
+  on the `setup` network that shares the model volume and exits.
+- **Evaluation scripts:** a `tools` build stage (backend image plus git, so
+  reports still record their commit) mounts the repo read-only and `reports/`
+  read-write, on `sandbox`. The canary audit stays on the host: API through
+  the proxy, logs via `docker compose logs`, and the DB via `docker compose
+  exec db psql`, so it needs no ports.
+- **Hardening:** backend, tools, and dashboard images run as uid 10001. The
+  proxy runs as nginx's unprivileged user with a read-only root filesystem,
+  a tmpfs `/tmp`, all capabilities dropped, and `no-new-privileges`. Its
+  access log records method, path, and status, never bodies.
+- **Native override:** `ollama` is moved to a profile so it isn't started, and
+  backend, ingest, and tools also join `edge` to reach
+  `host.docker.internal`. The file header says it is not isolated.
+
+### Why
+
+- **Tested the Docker behavior before designing around it.** Two throwaway
+  probes decided the layout:
+  1. On Docker Desktop, a container on an internal network **cannot publish
+     ports** (host connection failed) and has no egress (no route to
+     1.1.1.1, no DNS). So an ingress proxy is required.
+  2. I then tried to remove the proxy's route out by disabling outbound NAT on
+     its bridge (`enable_ip_masquerade=false`). Ingress still worked, but
+     **egress also still worked**, DNS included: Docker Desktop's VM
+     networking NATs regardless of the flag. Using that flag without testing
+     would have produced a false isolation claim. So the proxy keeps a route
+     out, and the air-gap check reports it instead of hiding it.
+- **Why a proxy rather than dual-homing the dashboard and backend.** Putting
+  the app containers on a normal network to publish ports would give the
+  containers that hold data a route out. The proxy is the smallest possible
+  dual-homed piece: no data, no code, a static config.
+- **Why the control probe.** Without it, "all probes blocked" is also what you
+  would see with the Wi-Fi off. The check returns INCONCLUSIVE unless the
+  same probe connects from a normal network at the same moment.
+- **Why a negative test.** A check that has never failed proves little.
+  Running it against the native-Ollama configuration, which really does have
+  a route out, produced FAIL with the exact cause.
+- **Why a `tools` container instead of publishing DB/Ollama ports.** Publishing
+  them would need a non-internal network and reopen a route out. Running the
+  scripts inside the sandbox measures the same pipeline without weakening it.
+- **Why ingest on every start.** It replaces each source's chunks, so it's
+  idempotent. It also guarantees stored and query embeddings come from the
+  same runtime after switching between native and Docker Ollama, which
+  previously had to be remembered by hand.
+
+### Known limitations
+
+- The proxy has a route to the internet. It holds no data, but a compromised
+  proxy could reach out. Docker Desktop offers no way to publish a port
+  without that; on Linux, host firewall rules (DOCKER-USER chain) could drop
+  its egress.
+- The air-gap check is point-in-time: it proves the state of the running
+  stack when it ran. Rerun it after any compose change.
+- Setup (`pull_models.sh`, image builds) needs the internet; the isolation
+  covers runtime only.
+- Source directories are still bind-mounted into backend, ingest, and
+  dashboard for development, so the running code is the working tree, not
+  only the image.
+- Mistake during the proof, recorded for honesty: the first proof run started
+  before the Task 8 code was committed, so its air-gap report
+  (`airgap_check_20260929-212849.json`) cites `1f9e6cc-dirty`. I stopped the
+  eval, committed, and reran everything from `2ef114f`; those are the reports
+  cited above.
