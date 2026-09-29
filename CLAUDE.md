@@ -18,7 +18,7 @@ This is a portfolio project for Solutions Engineer roles. The owner is building 
 - Python 3.11+, FastAPI, Pydantic settings
 - PostgreSQL 16 + pgvector (`pgvector/pgvector:pg16` image), psycopg / SQLAlchemy
 - Ollama: `llama3.2:3b` for generation, `nomic-embed-text` for embeddings
-- Microsoft Presidio (analyzer + anonymizer) with custom recognizers
+- Microsoft Presidio analyzer with custom recognizers; masking (typed, numbered placeholders) is our own code in `trust_engine/engine.py`
 - LangChain for text splitting only; files load directly (pypdf for PDFs), since the langchain-community loaders are deprecated
 - Streamlit dashboard
 - pytest, Faker, numpy
@@ -54,4 +54,4 @@ docker compose logs -f backend          # backend logs
 
 ## Current focus
 
-Update this line as work progresses: **Task 1: Local infrastructure + RAG.**
+Update this line as work progresses: **Tasks 1-2 done (+ lean Task 3). Next: code-attached citations with a citation-accuracy check, then Task 4.**

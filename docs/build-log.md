@@ -65,3 +65,111 @@ A second run from the same commit produced identical answers for all 11 question
 4. **Small eval set.** 11 questions, written by the same person who wrote the
    policy. Good for catching regressions, not a statistically meaningful
    accuracy estimate.
+
+---
+
+## Task 2: Trust Engine (+ lean Task 3 detector evaluation)
+
+### Detector accuracy (commit `ee46796`)
+
+`.venv/bin/python scripts/generate_dataset.py && .venv/bin/python scripts/eval_detector.py`
+→ `reports/eval_detector_20260929-160935.json`
+
+Scrubber `presidio-2.2.364+en_core_web_lg-3.8.0+rules-v1`, threshold 0.4. Dataset: 1,000 synthetic
+records (seed 42, sha256 `50e7fbd690777a54…`), 1,802 labeled spans.
+A gold span counts as found when a prediction of the **same type** overlaps it.
+
+| Entity | Support | Precision | Recall | F1 | TP | FP | FN | Exact span |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| PERSON | 595 | 99.5% | 92.8% | 96.0% | 552 | 3 | 43 | 537/552 |
+| EMAIL_ADDRESS | 142 | 100.0% | 100.0% | 100.0% | 142 | 0 | 0 | 142/142 |
+| PHONE_NUMBER | 290 | 100.0% | 88.6% | 94.0% | 257 | 0 | 33 | 257/257 |
+| US_SSN | 133 | 100.0% | 100.0% | 100.0% | 133 | 0 | 0 | 133/133 |
+| CREDIT_CARD | 89 | 100.0% | 79.8% | 88.8% | 71 | 0 | 18 | 71/71 |
+| IBAN_CODE | 87 | 100.0% | 100.0% | 100.0% | 87 | 0 | 0 | 87/87 |
+| US_ROUTING_NUMBER | 221 | 99.4% | 78.3% | 87.6% | 173 | 1 | 48 | 173/173 |
+| ACCOUNT_NUMBER | 245 | 100.0% | 78.0% | 87.6% | 191 | 0 | 54 | 191/191 |
+| **Overall (micro)** | 1802 | 99.8% | 89.1% | 94.1% | 1606 | 4 | 196 | 1591/1606 |
+
+| Slice | Precision | Recall | Spans |
+|---|---:|---:|---:|
+| Standard templates (clear context, common formats) | 99.9% | 96.2% | 1,363 |
+| Hard templates (no context, abbreviations, bare digits) | 100.0% | 67.2% | 439 |
+| No-PII records with any detection | | 3 of 150 | |
+
+`pii_scan` latency: mean 5.85 ms, P50 5.04 ms, P95 9.4 ms per record (host
+`.venv`, CPU; spaCy model load of 1.7 s excluded). The container runs the same
+pinned versions, but these timings were measured on the host.
+
+**How to read this.** I wrote both the recognizers and the dataset templates,
+so these numbers are optimistic. They show the detector does what it was
+designed to do and catch regressions; they don't estimate accuracy on real bank
+text. To limit self-grading, the dataset was written before the first eval run,
+and no recognizer was tuned against its results. The one code change after the
+first run was a bug fix (below), and both runs are recorded. For privacy,
+**recall is the number that matters**: a miss leaks, a false positive only
+over-masks.
+
+### Where recall is lost (not tuned away)
+
+- **No context words (0% on `no_context_numbers`).** "Send the funds to
+  080154303 / 38299737631" has nothing saying what those numbers are. This is
+  deliberate: flagging every bare 6-17 digit number would mask order IDs, ticket
+  numbers, and ZIP+4s everywhere.
+- **Bare phone after "call" (0% on `bare_phone_call`).** "call" is a spaCy stop
+  word, and Presidio builds the context window from non-stop-words, so it can
+  never act as context. The same bare digits after "phone" are caught (100%).
+- **Abbreviations Presidio doesn't tokenize as words.** "A/C" for account
+  (`rtn_abbrev` 50%: RTN is caught, A/C isn't) and "bank code" for routing
+  (`bank_code` 45.8%).
+- **Card formats outside Presidio's regex:** 12-digit Maestro, 19-digit Visa,
+  2-series Mastercard (2221-2720), 15-digit JCB. Luhn-valid, so real card numbers.
+- **Non-English names.** en_core_web_lg misses some non-English
+  names ("Ingo Rohleder", "Débora Sarabia").
+- **Context windows are 5 words wide.** In "routing number 058969106, account
+  number 713611155", the account number is also within reach of "routing" and is
+  labeled a routing number (still masked, wrong type).
+- **PERSON false positives on IDs:** "CHB-POL-350" and a ticket number were
+  tagged as people (3 of 150 negatives).
+
+### Debugging stories
+
+- **Presidio's built-in routing recognizer ignores context.** A passing ABA
+  checksum sets the score to 1.0, and about 1 in 10 random 9-digit numbers
+  pass. Replaced with a recognizer where the checksum can only *reject*, so
+  context words decide.
+- **"routing number" boosted phone numbers.** Presidio's phone recognizer lists
+  "number" as a context word, so "routing number 021000021" came out as a
+  PHONE_NUMBER at 0.75. It also scored any parseable digit run at exactly the
+  threshold. Now bare digits need phone context.
+- **The routing context never fired.** spaCy lemmatizes "routing" to "rout", and
+  Presidio matches context against lemmas by substring. The context word is now
+  "rout".
+- **The eval found a bug in the phone fix.** python-phonenumbers returned
+  `" 9826204505"` with a leading space, which slipped past the bare-digit
+  check. Fixing it removed all 6 phone false positives (phone precision 97.7% →
+  100.0%, overall 99.4% → 99.8%; recall unchanged). The pre-fix run is
+  `reports/eval_detector_20260929-160755.json`.
+- **"Email maria@..." tags "Email" as a PERSON.** A spaCy NER quirk with
+  capitalized sentence-initial words. Kept as a strict `xfail` test so a fix
+  shows up.
+- **Two hidden network calls.** Presidio downloads a missing spaCy model at
+  runtime, and its email recognizer downloads the public-suffix list on first
+  use. Now the model is installed at image build time (and startup fails if it's
+  missing), and email validation uses tldextract's bundled snapshot. A test blocks
+  sockets during scrubbing.
+
+### Design decisions
+
+- **Explicit recognizer registry and entity list.** Only the eight PII types are
+  masked. Presidio's NER also emits DATE_TIME, LOCATION, and ORG; masking those
+  would wreck policy text ("within 30 days"). The mock policy scrubs to zero
+  detections, which a test enforces.
+- **Own masking instead of presidio-anonymizer.** The anonymizer's operators are
+  set per entity type, so it can't number placeholders by appearance or reuse a
+  number for a repeated value. The replacement is about 20 lines and tested.
+  Overlaps are resolved across types (Presidio only merges same-type overlaps)
+  by score, then length.
+- **`scrubbed_by` names the exact scrubber**
+  (`presidio-2.2.364+en_core_web_lg-3.8.0+rules-v1`). After re-ingest, all 19
+  rows carry it and none say `passthrough-stub`.

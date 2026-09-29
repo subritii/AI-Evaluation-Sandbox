@@ -129,7 +129,7 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 **Core**
 
 - [x] **Task 1: Local infrastructure + RAG.** Compose with Postgres/pgvector and Ollama; ingest a mock policy PDF; answer questions offline.
-- [ ] **Task 2: Trust Engine.** Presidio with custom recognizers (routing numbers, IBAN, Luhn-validated cards, context-based account numbers); typed placeholders; scrub before embedding; no raw PII in logs.
+- [x] **Task 2: Trust Engine.** Presidio with custom recognizers (routing numbers, IBAN, Luhn-validated cards, context-based account numbers); typed placeholders; scrub before embedding; no raw PII in logs.
 - [ ] **Task 4: Gateway + latency.** FastAPI `/query` endpoint; per-stage timers; samples stored in Postgres; percentile calculations.
 - [ ] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.
 - [ ] **Task 7: Dashboard + report.** Streamlit upload, live latency chart, results panel, downloadable report with methodology.
@@ -137,7 +137,7 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 
 **Stretch**
 
-- [ ] **Task 3: Detector evaluation.** Labeled synthetic dataset; precision and recall per entity type.
+- [x] **Task 3: Detector evaluation (lean).** Labeled synthetic dataset; precision and recall per entity type.
 - [ ] **Task 5: Multi-tenancy.** `tenant_id` with Postgres row-level security; adversarial cross-tenant tests.
 - [ ] Reversible pseudonymization vault
 - [ ] Fault injection mode (simulated 429 / 500)
@@ -148,7 +148,7 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 
 | Metric | Result | How to reproduce |
 |---|---|---|
-| PII detector recall (overall) | — | `python scripts/eval_detector.py` |
+| PII detector recall (overall) | 89.1% (precision 99.8%) on 1,000 synthetic records; per-entity table in `docs/build-log.md` | `python scripts/generate_dataset.py && python scripts/eval_detector.py` |
 | Canary leakage | — | `python scripts/canary_audit.py` |
 | Cross-tenant retrievals | — | `python scripts/isolation_test.py` |
 | Security layer latency (P95) | — | Dashboard batch run |
