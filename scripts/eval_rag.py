@@ -67,14 +67,36 @@ class EvalCase:
     should_refuse: bool = False
 
 
-# The first four are the questions tested by hand so far. Others cover
-# different sections, including one table row and a second refusal case.
+# The first four are the questions tested by hand, in their original wording.
+# The rest cover other sections, including a table row, a threshold that
+# needs a comparison ($300,000 vs "$250,000 or more"), and a second refusal case.
 EVAL_SET = [
     EvalCase(
-        id="cvv_storage",
-        question="Can we store CVV codes after a card transaction is authorized?",
+        id="wire_callback",
+        question="Which wire transfers need a callback?",
+        evidence=("require a callback",),
+        # The $10,000 phone/email/fax rule. (Changed wire instructions also need
+        # a callback; not required here, so a partial answer still passes.)
+        keywords=(("10,000",), ("phone", "email", "fax")),
+    ),
+    EvalCase(
+        id="cvv_deletion",
+        question="When must a CVV be deleted?",
         evidence=("Card verification values (CVV/CVC)",),
-        keywords=(("never", "not be stored", "must not", "cannot"),),
+        # Policy: never stored after authorization.
+        keywords=(("authoriz", "authoris"),),
+    ),
+    EvalCase(
+        id="regulator_notification",
+        question="Within how many hours must we notify our federal regulator of an incident?",
+        evidence=("no later than 36 hours",),
+        # Distractor in the same chunk: the CISO/CCO must be told within 4 hours.
+        keywords=(("36 hours", "36-hour"),),
+    ),
+    EvalCase(
+        id="dress_code",
+        question="What is the bank's dress code?",
+        should_refuse=True,
     ),
     EvalCase(
         id="kyc_retention",
@@ -87,11 +109,6 @@ EVAL_SET = [
         question="When must a Currency Transaction Report be filed?",
         evidence=("within 15 calendar days",),
         keywords=(("15 calendar days", "15 days", "fifteen"),),
-    ),
-    EvalCase(
-        id="dress_code",
-        question="What is the dress code for branch employees?",
-        should_refuse=True,
     ),
     EvalCase(
         id="wire_dual_control",
@@ -117,12 +134,6 @@ EVAL_SET = [
         # Stated in both the retention table (section 6) and the AI section (10).
         evidence=("AI assistant prompt and response logs", "retained for 1 year"),
         keywords=(("1 year", "one year"),),
-    ),
-    EvalCase(
-        id="regulator_notification",
-        question="What is the deadline for notifying the primary federal regulator of a computer-security incident?",
-        evidence=("no later than 36 hours",),
-        keywords=(("36 hours",),),
     ),
     EvalCase(
         id="mortgage_rate",
