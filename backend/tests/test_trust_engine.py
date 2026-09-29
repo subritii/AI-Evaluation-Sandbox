@@ -56,7 +56,44 @@ def test_repeated_value_reuses_its_placeholder_number():
     assert masked(text) == "[PERSON_1] called. Later, [PERSON_2] and [PERSON_1] met."
 
 
+# Card formats outside Presidio's stock pattern (found by the detector eval and
+# canary audit). All Luhn-valid synthetic numbers.
+@pytest.mark.parametrize(
+    "number",
+    [
+        "2233-1159-2123-6361",  # 2-series Mastercard (2221-2720), 16 digits: Luhn alone
+        "213122646861646",  # JCB 2131, 15 digits: Luhn alone
+        "501813041180",  # Maestro, 12 digits: Luhn + context
+        "6761 5380 1292",  # Maestro, 12 digits, grouped
+        "4720754735486439068",  # Visa, 19 digits: Luhn + context
+    ],
+)
+def test_masks_extended_card_formats_with_card_context(number):
+    assert masked(f"My card {number} was charged twice.") == "My card [CREDIT_CARD_1] was charged twice."
+
+
+def test_standard_length_new_prefix_needs_no_context():
+    assert entity_types("Reference 2233115921236361 was closed.") == ["CREDIT_CARD"]
+
+
 # --- Should NOT be masked -----------------------------------------------------
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Order 501813041180 shipped.",  # Luhn-valid 12 digits, no card context
+        "Reference 4720754735486439068 closed.",  # Luhn-valid 19 digits, no card context
+        "My card 501813041181 was charged twice.",  # 12 digits with context, fails Luhn
+        "My card 4720754735486439069 was charged.",  # 19 digits with context, fails Luhn
+    ],
+)
+def test_rare_length_card_numbers_need_context_and_luhn(text):
+    assert "CREDIT_CARD" not in entity_types(text)
+
+
+def test_account_context_keeps_twelve_digits_an_account_number():
+    assert entity_types("Account number 501813041180 is overdrawn.") == ["ACCOUNT_NUMBER"]
+
 
 @pytest.mark.parametrize(
     "text",

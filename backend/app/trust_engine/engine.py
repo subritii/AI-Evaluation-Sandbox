@@ -18,7 +18,6 @@ import spacy
 from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_analyzer.predefined_recognizers import (
-    CreditCardRecognizer,
     IbanRecognizer,
     SpacyRecognizer,
     UsSsnRecognizer,
@@ -26,6 +25,7 @@ from presidio_analyzer.predefined_recognizers import (
 
 from app.trust_engine.recognizers import (
     AccountNumberRecognizer,
+    BankCardRecognizer,
     ContextualPhoneRecognizer,
     OfflineEmailRecognizer,
     UsRoutingNumberRecognizer,
@@ -62,7 +62,7 @@ SCORE_THRESHOLD = 0.4
 
 # Bump when recognizers, entities, or the threshold change, so stored rows
 # show which rules scrubbed them.
-RULES_VERSION = "v1"
+RULES_VERSION = "v2"  # v2: BankCardRecognizer replaces Presidio's CreditCardRecognizer
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,7 @@ def get_analyzer() -> AnalyzerEngine:
         OfflineEmailRecognizer(),
         ContextualPhoneRecognizer(),
         UsSsnRecognizer(),
-        CreditCardRecognizer(),  # Luhn checksum
+        BankCardRecognizer(),  # Luhn checksum; rare lengths also need context
         IbanRecognizer(),  # mod-97 checksum + per-country format
         UsRoutingNumberRecognizer(),
         AccountNumberRecognizer(),

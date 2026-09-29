@@ -19,7 +19,7 @@ import re
 import tldextract
 from presidio_analyzer import Pattern, PatternRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpArtifacts
-from presidio_analyzer.predefined_recognizers import EmailRecognizer, PhoneRecognizer
+from presidio_analyzer.predefined_recognizers import CreditCardRecognizer, EmailRecognizer, PhoneRecognizer
 
 # Base score for a pattern that should only count when a context word is nearby.
 # Below the 0.4 threshold alone; context lifts it to 0.4+.
@@ -80,6 +80,56 @@ class AccountNumberRecognizer(PatternRecognizer):
         super().__init__(
             supported_entity=self.ENTITY, patterns=self.PATTERNS, context=self.CONTEXT, name="AccountNumberRecognizer"
         )
+
+
+class BankCardRecognizer(CreditCardRecognizer):
+    """Payment card numbers, including formats Presidio's recognizer misses.
+
+    Presidio's pattern only accepts 13-17 digits starting with 1, 3, 4, 50-55,
+    or 6. The detector eval and canary audit found four real, Luhn-valid formats
+    outside it: 2-series Mastercard (2221-2720), 15-digit JCB (2131), 12-digit
+    Maestro, and 19-digit Visa.
+
+    Two tiers, because length changes how much a Luhn pass means:
+      - 13-17 digits: Luhn alone flags it (Presidio's behavior), now also for
+        the 2-series Mastercard and 2131 JCB prefixes.
+      - 12, 18, or 19 digits: Luhn plus a card context word. About 1 in 10
+        random numbers pass Luhn, and bare 12-digit strings are common
+        (account numbers, order IDs), so Luhn alone would over-mask them.
+    """
+
+    # The digit groups follow Presidio's (4, 3-4, 3-4, 3-5), which also cover
+    # Amex's 4-6-5 layout. Separators are optional single spaces or dashes.
+    COMMON_LENGTHS = Pattern(
+        "Card number, 13-17 digits (Luhn)",
+        r"\b(?!1\d{12}(?!\d))(?:4\d{3}|5[0-5]\d{2}|6\d{3}|1\d{3}|3\d{3}"
+        r"|222[1-9]|22[3-9]\d|2[3-6]\d{2}|27[01]\d|2720|2131)"
+        r"[- ]?\d{3,4}[- ]?\d{3,4}[- ]?\d{3,5}\b",
+        0.3,
+    )
+    # 12 digits: Maestro (50, 56-69). 18-19 digits: Visa (4), JCB (35),
+    # Discover/Maestro/UnionPay (5, 6). Grouped in fours, last group 2-3.
+    RARE_LENGTHS = Pattern(
+        "Card number, 12 or 18-19 digits (Luhn + context)",
+        r"\b(?:(?:50|5[6-9]|6\d)\d{2}(?:[- ]?\d{4}){2}"
+        r"|(?:4\d|35|5\d|6\d)\d{2}(?:[- ]?\d{4}){3}[- ]?\d{2,3})\b",
+        CONTEXT_ONLY_SCORE,
+    )
+    RARE_DIGIT_COUNTS = (12, 18, 19)
+    CONTEXT = CreditCardRecognizer.CONTEXT + ["debit"]
+
+    def __init__(self) -> None:
+        super().__init__(
+            patterns=[self.COMMON_LENGTHS, self.RARE_LENGTHS], context=self.CONTEXT, name="BankCardRecognizer"
+        )
+
+    def validate_result(self, pattern_text: str) -> bool | None:
+        """Luhn failure always rejects. A pass confirms 13-17 digit numbers (score 1.0);
+        for 12/18/19 digits it returns None, keeping the low base score so context decides."""
+        if not super().validate_result(pattern_text):
+            return False
+        digit_count = sum(ch.isdigit() for ch in pattern_text)
+        return None if digit_count in self.RARE_DIGIT_COUNTS else True
 
 
 # Uses tldextract's bundled public-suffix snapshot. The default extractor
