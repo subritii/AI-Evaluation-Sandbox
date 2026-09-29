@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from html import escape
 
 from batch import STAGES
-from reports import backend_of
+from reports import backend_of, latency_n
 
 STAGE_NOTES = {
     "pii_scan": "Trust Engine (Presidio + custom recognizers) detects and masks the question",
@@ -244,10 +244,6 @@ def _canary_section(can: dict | None) -> str:
     if not can:
         return "<h2>4. Canary leakage audit</h2><p class='muted'>No canary audit report found.</p>"
     planted, found = can["planted"], can["found"]
-    rows = "".join(
-        f"<tr><td>{_e(e)}</td><td class='num'>{n}</td><td class='num'>{found['by_entity'].get(e, 0)}</td></tr>"
-        for e, n in sorted(planted["by_entity"].items())
-    )
     by_loc = found.get("by_location") or {}
     searched = can.get("searched") or {}
     locations = [f"response.{x}" for x in searched.get("responses", [])] + [f"logs.{x}" for x in searched.get("logs", [])]
@@ -264,15 +260,41 @@ def _canary_section(can: dict | None) -> str:
         gaps = "".join(f"<p class='warn'>Not searched: {_e(x)}</p>" for x in can["not_searched"])
     else:
         gaps = "<p class='muted'>Every listed location was searched.</p>"
+    latency = can.get("latency") or {}
+    latency_html = (
+        f"<h3>Per-stage latency of this batch</h3>{_latency_table(latency['stages'])}{_notes(latency.get('notes'))}"
+        if latency.get("stages") else ""
+    )
+    unmasked, downstream = can["unmasked"], can["downstream"]
     return (
         "<h2>4. Canary leakage audit</h2>"
         + _source_line(can["source"], f" · run <code>{_e(can['run_id'])}</code> · backend: <b>{_e(_backend_label(backend_of(can)))}</b>")
-        + f"<p><b>{found['total']} of {planted['total']}</b> planted synthetic canaries were found somewhere they "
-        f"shouldn't be, across {can['requests']} requests. A canary in <code>response.masked_question</code> means the Trust "
-        "Engine did not mask it, so the embedding model and LLM received it.</p>"
-        "<div class='wide'><table><tr><th>Entity</th><th class='num'>Planted</th><th class='num'>Found</th></tr>"
-        f"{rows}</table></div><h3>Where canaries were found</h3><table><tr><th>Location</th><th class='num'>Canaries found</th></tr>"
-        f"{loc_rows}</table>{gaps}"
+        + f"<p>{planted['total']} synthetic canaries were planted across {can['requests']} requests. Two different "
+        "questions, answered separately:</p><ul>"
+        f"<li><b>Unmasked by the Trust Engine: {unmasked['total']}/{planted['total']}.</b> Found in "
+        "<code>response.masked_question</code>, the text sent to the embedding model and the local LLM. These are "
+        "detector misses; the models received the value.</li>"
+        f"<li><b>Found in answers, logs, or storage: {downstream['total']}/{planted['total']}.</b> Found in an answer, "
+        "another response field, a searched log, or any database text column.</li></ul>"
+        "<div class='wide'><table><tr><th>Entity</th><th class='num'>Planted</th><th class='num'>Unmasked</th>"
+        "<th class='num'>In answers, logs, or storage</th></tr>"
+        + "".join(
+            f"<tr><td>{_e(e)}</td><td class='num'>{n}</td><td class='num'>{unmasked['by_entity'].get(e, 0)}</td>"
+            f"<td class='num'>{downstream['by_entity'].get(e, 0)}</td></tr>"
+            for e, n in sorted(planted["by_entity"].items())
+        )
+        + f"</table></div><h3>Where canaries were found</h3><table><tr><th>Location</th><th class='num'>Canaries found</th></tr>"
+        f"{loc_rows}</table>{gaps}{latency_html}"
+    )
+
+
+def _isolation_statement(backend: str | None) -> str:
+    """What is and isn't proven about network access. Update when Task 8's isolation test passes."""
+    return (
+        "No external services are called: embeddings and generation go to a local Ollama, and there are no cloud "
+        "APIs or telemetry. Network isolation (containers unable to reach the internet) is enforced only in the "
+        "all-Docker configuration, which Task 8 sets up and tests."
+        + (" This run used native Ollama on the host, which is outside that isolation." if backend == "native" else "")
     )
 
 
@@ -319,7 +341,8 @@ def _methodology(batch, rag, det, can) -> str:
         "<h3>Pipeline</h3><p>Each question goes through the gateway's <code>POST /query</code>: the Trust Engine masks "
         "PII with typed placeholders, the masked question is embedded (Ollama) and matched against policy chunks in "
         "pgvector (chunks were masked before embedding), a local LLM answers from the retrieved chunks, and citations "
-        "are attached by code from the retrieved chunks, never written by the model. Nothing leaves the machine.</p>"
+        "are attached by code from the retrieved chunks, never written by the model.</p>"
+        f"<p>{_isolation_statement(gw.get('model_backend') if batch else None)}</p>"
         f"<h3>Configuration (reported by the gateway at run time)</h3><table>{config_rows}</table>"
         + "".join(f"<p class='warn'>{_e(m)}</p>" for m in mismatches)
         + "<h3>Latency</h3><ul>"
@@ -350,17 +373,40 @@ def _methodology(batch, rag, det, can) -> str:
     )
 
 
+def headline_latency(batch: dict | None, can: dict | None) -> tuple[dict, str] | None:
+    """The latency summary with the most samples, and a label naming it.
+
+    Headline percentiles should rest on the largest run available: a 20-question
+    dashboard batch has P95 decided by one request, the 200-request canary batch by ten.
+    """
+    candidates = []
+    if batch and latency_n(batch.get("latency")):
+        backend = _backend_label((batch.get("gateway") or {}).get("model_backend"))
+        candidates.append((latency_n(batch["latency"]), batch["latency"], f"dashboard batch {batch['run_id']}, {backend}"))
+    if can and latency_n(can.get("latency")):
+        candidates.append((latency_n(can["latency"]), can["latency"], f"canary audit batch {can['run_id']}, {_backend_label(backend_of(can))}"))
+    if not candidates:
+        return None
+    n, latency, label = max(candidates, key=lambda c: c[0])  # ties keep the dashboard batch (listed first)
+    return latency, f"n={n}, {label}"
+
+
 def _tiles(batch, rag, det, can) -> str:
     tiles = []
-    stages = ((batch or {}).get("latency") or {}).get("stages") or {}
-    if "pii_scan" in stages:
-        tiles.append((f"{_ms(stages['pii_scan']['p95'])} ms", "PII scan P95 (batch)"))
-    if "total" in stages:
-        tiles.append((f"{_ms(stages['total']['p95'])} ms", "End-to-end P95 (batch)"))
+    headline = headline_latency(batch, can)
+    if headline:
+        latency, label = headline
+        stages = latency["stages"]
+        if "pii_scan" in stages:
+            tiles.append((f"{_ms(stages['pii_scan']['p95'])} ms", f"PII scan P95 ({label})"))
+        if "total" in stages:
+            tiles.append((f"{_ms(stages['total']['p95'])} ms", f"End-to-end P95 ({label})"))
     if det:
         tiles.append((_pct(det["overall"]["recall"]), f"PII detector recall (precision {_pct(det['overall']['precision'])})"))
     if can:
-        tiles.append((f"{can['found']['total']}/{can['planted']['total']}", "Canaries found (lower is better)"))
+        planted = can["planted"]["total"]
+        tiles.append((f"{can['unmasked']['total']}/{planted}", "Canaries unmasked by the Trust Engine (sent to the models)"))
+        tiles.append((f"{can['downstream']['total']}/{planted}", "Canaries found in answers, logs, or storage"))
     if rag and rag["answers_correct"] is not None:
         tiles.append((f"{rag['answers_correct']}/{rag['answerable']}", "RAG answers correct"))
     return "<div class='tiles'>" + "".join(

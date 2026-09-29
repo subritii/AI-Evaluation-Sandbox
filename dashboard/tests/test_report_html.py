@@ -42,7 +42,12 @@ DET = summarize_detector(Path("eval_detector_1.json"), {
 })
 
 
-def canary(not_searched):
+def finding(request, value, location, entity="PERSON"):
+    return {"request": request, "value_synthetic": value, "location": location, "entity_type": entity}
+
+
+def canary(not_searched, findings=None, latency_n=200):
+    stages = {s: dict(v, n=latency_n) for s, v in STAGES.items()}
     report = {
         "run_id": "canary-1", "started_at": "t", "git_commit": "abc",
         "config": {"requests": 200}, "environment": {"host_load_avg_before": [2.2, 1, 1], "host_load_avg_after": [4.1, 1, 1]},
@@ -50,6 +55,9 @@ def canary(not_searched):
         "planted": {"total": 207, "by_entity": {"PERSON": 51, "US_SSN": 21}},
         "found": {"total": 9, "by_entity": {"PERSON": 9}, "by_location": {"response.masked_question": {"PERSON": 9}}},
         "searched_locations": {"responses": ["masked_question"], "logs": ["backend"], "database_columns": ["a.b"]},
+        "findings": findings if findings is not None else
+        [finding(i, f"Name {i}", "response.masked_question") for i in range(9)],
+        "latency": {"stages": stages, "notes": []},
     }
     if not_searched is not ...:
         report["not_searched"] = not_searched
@@ -64,7 +72,7 @@ def build(**overrides):
 def test_all_sections_and_key_numbers_present():
     html = build()
     for text in ("1. Batch run", "2. RAG answer quality", "3. PII detector accuracy", "4. Canary leakage audit",
-                 "5. Methodology", "Known gaps", "9 of 207", "90.0%", "3 of 150", "native Ollama"):
+                 "5. Methodology", "Known gaps", "90.0%", "3 of 150", "native Ollama"):
         assert text in html, text
 
 
@@ -111,3 +119,36 @@ def test_small_sample_notes_are_merged_only_when_identical():
     mixed = ["pii_scan: only 20 samples; P99 is not reliable below 100.",
              "total: only 19 samples; P99 is not reliable below 100."]
     assert combine_notes(mixed) == mixed
+
+
+def test_canary_tiles_separate_detector_misses_from_downstream_leaks():
+    html = build()
+    assert "9/207" in html and "Canaries unmasked by the Trust Engine" in html
+    assert "0/207" in html and "Canaries found in answers, logs, or storage" in html
+
+
+def test_canary_split_counts_distinct_canaries_per_group():
+    findings = [
+        finding(1, "Ana", "response.masked_question"),
+        finding(1, "Ana", "response.answer"),  # same canary, also echoed in the answer: counts in both
+        finding(2, "021000021", "logs.backend", "US_ROUTING_NUMBER"),
+        finding(2, "021000021", "database.t.c", "US_ROUTING_NUMBER"),  # same canary, two places: counts once
+    ]
+    can = canary([], findings)
+    assert can["unmasked"] == {"total": 1, "by_entity": {"PERSON": 1}}
+    assert can["downstream"] == {"total": 2, "by_entity": {"PERSON": 1, "US_ROUTING_NUMBER": 1}}
+
+
+def test_headline_latency_uses_the_largest_run_and_says_so():
+    # Batch has n=200 in its fixture; make the canary run bigger, then smaller.
+    assert "n=500, canary audit batch canary-1" in build(can=canary([], latency_n=500))
+    html = build(can=canary([], latency_n=20))
+    assert "n=200, dashboard batch dashboard-20260101-000000" in html
+
+
+def test_isolation_claim_is_scoped_to_what_is_enforced():
+    html = build()
+    assert "Nothing leaves the machine" not in html
+    assert "No external services are called" in html
+    assert "enforced only in the all-Docker configuration" in html
+    assert "native Ollama on the host, which is outside that isolation" in html  # batch fixture is native

@@ -215,8 +215,13 @@ with tab_results:
             st.info("No canary report. Run `scripts/canary_audit.py` on the host.")
         else:
             source_caption(can_s, f" · run `{can_s['run_id']}` · backend **{reports.backend_of(can_s) or 'not recorded'}**")
-            st.metric("Canaries found (lower is better)", f"{can_s['found']['total']}/{can_s['planted']['total']}")
-            df = pd.DataFrame([{"entity": e, "planted": n, "found": can_s["found"]["by_entity"].get(e, 0)}
+            planted = can_s["planted"]["total"]
+            c = st.columns(2)
+            c[0].metric("Unmasked by the Trust Engine", f"{can_s['unmasked']['total']}/{planted}",
+                        help="In the masked question: the embedding model and LLM received the value.")
+            c[1].metric("Found in answers, logs, or storage", f"{can_s['downstream']['total']}/{planted}")
+            df = pd.DataFrame([{"entity": e, "planted": n, "unmasked": can_s["unmasked"]["by_entity"].get(e, 0),
+                                "in answers, logs, or storage": can_s["downstream"]["by_entity"].get(e, 0)}
                                for e, n in sorted(can_s["planted"]["by_entity"].items())])
             st.dataframe(df, hide_index=True, width="stretch")
             st.write("Found by location:", can_s["found"].get("by_location") or "nowhere")

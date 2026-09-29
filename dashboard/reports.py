@@ -86,6 +86,32 @@ def summarize_detector(path: Path, report: dict) -> dict:
     }
 
 
+# Where a found canary means the Trust Engine missed it: the text sent to the models.
+UNMASKED_LOCATION = "response.masked_question"
+
+
+def split_findings(findings: list[dict]) -> dict:
+    """Distinct canaries (request, value) in two groups, since they mean different things:
+
+    unmasked:   in the masked question, so the Trust Engine missed it and the
+                embedding model and LLM received it (a detector miss).
+    downstream: in an answer, another response field, a log, or the database,
+                i.e. it ended up somewhere it persists or is shown (a leak past the models).
+    A canary can be in both.
+    """
+    groups: dict[str, dict] = {"unmasked": {}, "downstream": {}}
+    for f in findings:
+        group = "unmasked" if f["location"] == UNMASKED_LOCATION else "downstream"
+        groups[group][(f["request"], f["value_synthetic"])] = f["entity_type"]
+    result = {}
+    for group, canaries in groups.items():
+        by_entity: dict[str, int] = {}
+        for entity in canaries.values():
+            by_entity[entity] = by_entity.get(entity, 0) + 1
+        result[group] = {"total": len(canaries), "by_entity": by_entity}
+    return result
+
+
 def summarize_canary(path: Path, report: dict) -> dict:
     """Canary audit: canaries found vs planted, by entity and location, and what wasn't searched."""
     models = report.get("model_config") or (report.get("latency") or {}).get("models")
@@ -100,11 +126,17 @@ def summarize_canary(path: Path, report: dict) -> dict:
         ],
         "planted": report["planted"],
         "found": report["found"],
+        **split_findings(report.get("findings", [])),
         "searched": report.get("searched_locations"),
         # Reports from before this field existed didn't check for gaps.
         "not_searched": report.get("not_searched"),
         "latency": report.get("latency"),
     }
+
+
+def latency_n(latency: dict | None) -> int:
+    """Samples behind a latency summary (the `total` stage), 0 if none."""
+    return (((latency or {}).get("stages") or {}).get("total") or {}).get("n", 0)
 
 
 def backend_of(summary: dict | None) -> str | None:
