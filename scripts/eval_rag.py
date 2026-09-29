@@ -22,6 +22,7 @@ so each number in the summary can be traced back to a real run.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -287,6 +288,7 @@ def main() -> None:
 
     settings = get_settings()
     started_at = datetime.now(timezone.utc)
+    load_before = os.getloadavg()
     client = OllamaClient(settings.ollama_base_url)
     results: list[CaseResult] = []
     try:
@@ -318,6 +320,12 @@ def main() -> None:
             "chunks_in_db": chunk_count,
             "temperature": None if args.retrieve_only else settings.llm_temperature,
             "max_tokens": None if args.retrieve_only else settings.llm_max_tokens,
+        },
+        # Timings depend on what else the machine was doing; record it.
+        "environment": {
+            "host_load_avg_before": load_before,
+            "host_load_avg_after": os.getloadavg(),
+            "host_cpus": os.cpu_count(),
         },
         "results": [asdict(r) for r in results],
     }
