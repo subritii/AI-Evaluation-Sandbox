@@ -23,11 +23,17 @@ class ScrubResult:
     entity_counts: dict[str, int] = field(default_factory=dict)
 
 
-def scrub_for_storage(text: str) -> ScrubResult:
-    """Mask PII in `text` before it is embedded or stored."""
+def scrub(text: str) -> ScrubResult:
+    """Mask PII in `text`. Used for incoming questions and, via
+    `scrub_for_storage`, for everything written to the vector table."""
     detections = detect(text)
     return ScrubResult(
         text=mask(text, detections),
         scrubbed_by=scrubber_id(),
         entity_counts=dict(Counter(d.entity_type for d in detections)),
     )
+
+
+def scrub_for_storage(text: str) -> ScrubResult:
+    """Mask PII in `text` before it is embedded or stored (the storage chokepoint)."""
+    return scrub(text)

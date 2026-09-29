@@ -12,5 +12,6 @@ COPY tests ./tests
 ENV PYTHONPATH=/code \
     PYTHONUNBUFFERED=1
 
-# Placeholder until the FastAPI gateway lands in Task 4.
-CMD ["python", "-m", "app.rag.query", "--help"]
+# The gateway. `docker compose run --rm backend <cmd>` still runs one-off
+# commands (ingest, pytest) in the same image.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

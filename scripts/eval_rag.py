@@ -4,10 +4,13 @@ For each question this records:
   - retrieval: was the expected chunk in the top-k, and at what rank
   - answer:    does it contain the expected keywords (or, for out-of-scope
                questions, does it correctly refuse)
-  - timings:   retrieval, time_to_first_token, generation, total (ms)
+  - citations: do the code-attached citations include the chunk holding the
+               evidence (and what share of them do); refusals must cite nothing
+  - timings:   pii_scan, retrieval, time_to_first_token, generation, total (ms)
 
-It calls the same functions as `app.rag.query` (embed_query, retrieve,
-build_messages), so it measures the real pipeline, not a copy of it.
+It calls `app.rag.pipeline.run_query`, the same function the API serves, so it
+measures the real pipeline, not a copy of it. Refusal detection and citation
+selection live in `app.rag.grounding`.
 
 Run on the host, with db and ollama up and the policies ingested:
     .venv/bin/python scripts/eval_rag.py
@@ -21,7 +24,6 @@ import argparse
 import json
 import subprocess
 import sys
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,20 +33,10 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 from app.config import get_settings  # noqa: E402
 from app.db.connection import get_connection  # noqa: E402
-from app.rag.embeddings import embed_query  # noqa: E402
 from app.rag.ollama_client import OllamaClient  # noqa: E402
-from app.rag.query import build_messages  # noqa: E402
-from app.rag.retrieval import retrieve  # noqa: E402
+from app.rag.pipeline import run_query  # noqa: E402
 
 REPORTS_DIR = REPO_ROOT / "reports"
-
-# Phrases that indicate the model declined to answer from the excerpts.
-# A heuristic: the full answer is saved in the report so misses can be checked by hand.
-REFUSAL_MARKERS = [
-    "don't know", "do not know", "not contain", "does not mention", "do not mention",
-    "not mentioned", "no information", "not address", "not covered", "not specified",
-    "not provide", "unable to find", "cannot find", "can't find", "no mention",
-]
 
 
 @dataclass(frozen=True)
@@ -155,21 +147,24 @@ class CaseResult:
     answer_pass: bool | None = None
     missing_keywords: list[list[str]] = field(default_factory=list)
     refused: bool | None = None
+    citations: list[dict] = field(default_factory=list)
+    # Answerable: a cited chunk contains the evidence. Refusal cases: nothing was cited.
+    citation_pass: bool | None = None
+    # Answerable only: share of cited chunks that contain the evidence.
+    citation_precision: float | None = None
     timings_ms: dict[str, float] = field(default_factory=dict)
+
+
+def has_evidence(case: EvalCase, content: str) -> bool:
+    return any(e.lower() in content.lower() for e in case.evidence)
 
 
 def find_expected_rank(case: EvalCase, contents: list[str]) -> int | None:
     """Return the 1-based rank of the first retrieved chunk containing any evidence text."""
     for rank, content in enumerate(contents, start=1):
-        if any(e.lower() in content.lower() for e in case.evidence):
+        if has_evidence(case, content):
             return rank
     return None
-
-
-def is_refusal(answer: str) -> bool:
-    """Heuristic check for a 'the excerpts don't say' style answer."""
-    normalized = answer.lower().replace("’", "'")
-    return any(marker in normalized for marker in REFUSAL_MARKERS)
 
 
 def missing_keyword_groups(case: EvalCase, answer: str) -> list[list[str]]:
@@ -178,16 +173,27 @@ def missing_keyword_groups(case: EvalCase, answer: str) -> list[list[str]]:
     return [list(group) for group in case.keywords if not any(k.lower() in lowered for k in group)]
 
 
+def score_citations(case: EvalCase, result: CaseResult, citations, chunks) -> None:
+    """Citation accuracy: are the code-attached citations the chunks holding the evidence?"""
+    content = {(c.source, c.chunk_index): c.content for c in chunks}
+    result.citations = [
+        {"ref": f"{c.source}#{c.chunk_index}", "section": c.section, "support": c.support,
+         "has_evidence": bool(case.evidence) and has_evidence(case, content[(c.source, c.chunk_index)])}
+        for c in citations
+    ]
+    if case.should_refuse:
+        result.citation_pass = not citations
+    else:
+        supported = sum(c["has_evidence"] for c in result.citations)
+        result.citation_pass = supported > 0
+        result.citation_precision = round(supported / len(citations), 3) if citations else None
+
+
 def run_case(case: EvalCase, client: OllamaClient, conn, settings, top_k: int, retrieve_only: bool) -> CaseResult:
-    """Run one question through retrieval (and generation), timing each stage."""
-    timings: dict[str, float] = {}
-    t_start = time.perf_counter()
+    """Run one question through the production pipeline and score it."""
+    q = run_query(case.question, client=client, conn=conn, settings=settings, top_k=top_k, generate=not retrieve_only)
 
-    query_vector = embed_query(client, settings.embed_model, case.question, settings.embed_dim)
-    chunks = retrieve(conn, query_vector, top_k)
-    timings["retrieval"] = (time.perf_counter() - t_start) * 1000
-
-    rank = find_expected_rank(case, [c.content for c in chunks]) if case.evidence else None
+    rank = find_expected_rank(case, [c.content for c in q.chunks]) if case.evidence else None
     result = CaseResult(
         id=case.id,
         question=case.question,
@@ -195,40 +201,24 @@ def run_case(case: EvalCase, client: OllamaClient, conn, settings, top_k: int, r
         retrieved=[
             {"ref": f"{c.source}#{c.chunk_index}", "similarity": round(c.similarity, 4),
              "heading": c.content.split("\n", 1)[0]}
-            for c in chunks
+            for c in q.chunks
         ],
         expected_rank=rank,
         retrieval_hit=None if case.should_refuse else rank is not None,
+        timings_ms=q.timings_ms,
     )
 
-    if not retrieve_only:
-        t_gen_start = time.perf_counter()
-        t_first = None
-        fragments: list[str] = []
-        for fragment in client.chat_stream(
-            settings.llm_model, build_messages(case.question, chunks), temperature=settings.llm_temperature
-        ):
-            if t_first is None:
-                t_first = time.perf_counter()
-            fragments.append(fragment)
-        t_gen_end = time.perf_counter()
-        if t_first is not None:
-            timings["time_to_first_token"] = (t_first - t_gen_start) * 1000
-            timings["generation"] = (t_gen_end - t_first) * 1000
-
-        answer = "".join(fragments).strip()
-        result.answer = answer
-        result.refused = is_refusal(answer)
+    if q.answer is not None:
+        result.answer = q.answer
+        result.refused = q.refused
         if case.should_refuse:
-            result.answer_pass = result.refused
+            result.answer_pass = q.refused
         else:
-            result.missing_keywords = missing_keyword_groups(case, answer)
+            result.missing_keywords = missing_keyword_groups(case, q.answer)
             # Keywords alone aren't enough: a compliance answer that hedges with
             # "I don't know" while quoting the rule is contradictory, so it fails.
-            result.answer_pass = not result.missing_keywords and not result.refused
-
-    timings["total"] = (time.perf_counter() - t_start) * 1000
-    result.timings_ms = {k: round(v, 1) for k, v in timings.items()}
+            result.answer_pass = not result.missing_keywords and not q.refused
+        score_citations(case, result, q.citations, q.chunks)
     return result
 
 
@@ -243,7 +233,8 @@ def _fmt_ms(timings: dict[str, float], stage: str) -> str:
 
 def print_summary(results: list[CaseResult], retrieve_only: bool) -> None:
     """Print a per-question table followed by aggregate scores."""
-    header = f"{'id':<24} {'type':<7} {'retr':<5} {'rank':<5} {'answer':<7} {'retr_ms':>8} {'ttft_ms':>8} {'gen_ms':>8} {'total_ms':>9}"
+    header = (f"{'id':<24} {'type':<7} {'retr':<5} {'rank':<5} {'answer':<7} {'cite':<5} "
+              f"{'retr_ms':>8} {'ttft_ms':>8} {'gen_ms':>8} {'total_ms':>9}")
     print("\n" + header)
     print("-" * len(header))
     for r in results:
@@ -251,6 +242,7 @@ def print_summary(results: list[CaseResult], retrieve_only: bool) -> None:
         print(
             f"{r.id:<24} {'refuse' if r.should_refuse else 'answer':<7} "
             f"{_fmt_bool(r.retrieval_hit):<5} {r.expected_rank or '-':<5} {_fmt_bool(r.answer_pass):<7} "
+            f"{_fmt_bool(r.citation_pass):<5} "
             f"{_fmt_ms(t, 'retrieval'):>8} {_fmt_ms(t, 'time_to_first_token'):>8} "
             f"{_fmt_ms(t, 'generation'):>8} {_fmt_ms(t, 'total'):>9}"
         )
@@ -268,6 +260,12 @@ def print_summary(results: list[CaseResult], retrieve_only: bool) -> None:
         refusals = [r for r in results if r.should_refuse]
         refused_ok = sum(bool(r.answer_pass) for r in refusals)
         print(f"Correct answers (keywords, no hedging): {answered_ok}/{len(answerable)}   correct refusals: {refused_ok}/{len(refusals)}")
+        cite_hits = sum(bool(r.citation_pass) for r in answerable)
+        precisions = [r.citation_precision for r in answerable if r.citation_precision is not None]
+        mean_precision = f"{sum(precisions) / len(precisions):.0%}" if precisions else "-"
+        clean_refusals = sum(bool(r.citation_pass) for r in refusals)
+        print(f"Citations: evidence chunk cited {cite_hits}/{len(answerable)}   mean citation precision {mean_precision}"
+              f"   refusals citing nothing {clean_refusals}/{len(refusals)}")
 
 
 def _git_commit() -> str | None:
@@ -319,6 +317,7 @@ def main() -> None:
             "chunk_overlap": settings.chunk_overlap,
             "chunks_in_db": chunk_count,
             "temperature": None if args.retrieve_only else settings.llm_temperature,
+            "max_tokens": None if args.retrieve_only else settings.llm_max_tokens,
         },
         "results": [asdict(r) for r in results],
     }

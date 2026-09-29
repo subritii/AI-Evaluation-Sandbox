@@ -1,9 +1,8 @@
 # Secure Enterprise AI Evaluation Sandbox
 #
-# Task 1 services: Postgres + pgvector (vector store) and Ollama (local models).
-# The `backend` service is a CLI container for ingest/query/tests; it gets a
-# long-running FastAPI command in Task 4. Task 8 moves everything onto an
-# `internal: true` network for the air-gap proof.
+# Services: Postgres + pgvector (vector store), Ollama (local models), and the
+# FastAPI gateway (`backend`, also used for one-off ingest/test commands).
+# Task 8 moves everything onto an `internal: true` network for the air-gap proof.
 name: ai-eval-sandbox
 
 services:
@@ -45,9 +44,15 @@ services:
 
   backend:
     build: ./backend
-    # Only started on demand (`docker compose run --rm backend ...`) until the
-    # FastAPI gateway exists in Task 4.
-    profiles: ["cli"]
+    ports:
+      # Loopback only, like the other services.
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     environment:
       # Inside Compose, reach services by name, not localhost.
       POSTGRES_HOST: db
@@ -59,6 +64,7 @@ services:
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-256}
       POLICIES_DIR: /data/policies
     volumes:
       # Mount source so code edits don't need an image rebuild.

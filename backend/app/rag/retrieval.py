@@ -13,6 +13,8 @@ class RetrievedChunk:
     content: str
     # 1 - cosine distance. 1.0 = same direction; ~0 = unrelated.
     similarity: float
+    # Policy section heading from chunk metadata (None for non-Markdown sources).
+    section: str | None = None
 
 
 def retrieve(conn: psycopg.Connection, query_vector: list[float], top_k: int = 4) -> list[RetrievedChunk]:
@@ -23,7 +25,8 @@ def retrieve(conn: psycopg.Connection, query_vector: list[float], top_k: int = 4
     """
     rows = conn.execute(
         """
-        SELECT source, chunk_index, content, embedding <=> %(q)s AS distance
+        SELECT source, chunk_index, content, embedding <=> %(q)s AS distance,
+               metadata->>'section' AS section
         FROM document_chunks
         ORDER BY embedding <=> %(q)s
         LIMIT %(k)s
@@ -31,6 +34,6 @@ def retrieve(conn: psycopg.Connection, query_vector: list[float], top_k: int = 4
         {"q": np.array(query_vector, dtype=np.float32), "k": top_k},
     ).fetchall()
     return [
-        RetrievedChunk(source=r[0], chunk_index=r[1], content=r[2], similarity=1.0 - float(r[3]))
+        RetrievedChunk(source=r[0], chunk_index=r[1], content=r[2], similarity=1.0 - float(r[3]), section=r[4])
         for r in rows
     ]

@@ -31,16 +31,24 @@ class OllamaClient:
         _raise_for_ollama_error(response)
         return response.json()["embeddings"]
 
-    def chat_stream(self, model: str, messages: list[dict], temperature: float | None = None) -> Iterator[str]:
+    def chat_stream(
+        self, model: str, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None
+    ) -> Iterator[str]:
         """Stream a chat completion, yielding text fragments as they arrive.
 
         Streaming lets callers measure time-to-first-token separately from
         total generation time. `temperature=None` leaves Ollama's default
-        (sampled, so answers vary between runs).
+        (sampled, so answers vary between runs). `max_tokens` maps to Ollama's
+        `num_predict`.
         """
         payload: dict = {"model": model, "messages": messages, "stream": True}
+        options: dict = {}
         if temperature is not None:
-            payload["options"] = {"temperature": temperature}
+            options["temperature"] = temperature
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+        if options:
+            payload["options"] = options
         with self._http.stream("POST", "/api/chat", json=payload) as response:
             if response.is_error:
                 response.read()

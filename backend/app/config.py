@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     # 0 = greedy decoding: the same question and context give the same answer,
     # which compliance Q&A and reproducible eval metrics both need.
     llm_temperature: float = 0.0
+    # Cap on generated tokens, so one runaway answer can't dominate tail latency.
+    llm_max_tokens: int = 256
     # Must match the `vector(N)` column in db/schema.sql. nomic-embed-text -> 768.
     embed_dim: int = 768
 

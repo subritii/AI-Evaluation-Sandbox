@@ -32,3 +32,10 @@ def test_chat_stream_omits_options_when_temperature_unset():
     client = _client_capturing_requests(sent)
     list(client.chat_stream("m", [{"role": "user", "content": "q"}]))
     assert "options" not in sent[0]
+
+
+def test_chat_stream_sends_max_tokens_as_num_predict():
+    sent: list[dict] = []
+    client = _client_capturing_requests(sent)
+    list(client.chat_stream("m", [{"role": "user", "content": "q"}], temperature=0.0, max_tokens=256))
+    assert sent[0]["options"] == {"temperature": 0.0, "num_predict": 256}
