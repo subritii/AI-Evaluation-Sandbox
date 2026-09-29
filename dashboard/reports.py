@@ -14,6 +14,7 @@ KINDS = {
     "eval_rag": "eval_rag_",
     "eval_detector": "eval_detector_",
     "canary_audit": "canary_audit_",
+    "airgap_check": "airgap_check_",
 }
 
 
@@ -131,6 +132,26 @@ def summarize_canary(path: Path, report: dict) -> dict:
         # Reports from before this field existed didn't check for gaps.
         "not_searched": report.get("not_searched"),
         "latency": report.get("latency"),
+    }
+
+
+def summarize_airgap(path: Path, report: dict) -> dict:
+    """Air-gap check: verdict, which containers were isolated, and what was reported about the proxy."""
+    checks = report.get("checks", {})
+    inventory = checks.get("inventory", [])
+    return {
+        "source": _source(path, report),
+        "verdict": report["verdict"],
+        "model_backend": report.get("model_backend"),
+        "problems": report.get("problems", []),
+        "notes": report.get("notes", []),
+        "isolated": sorted(c["service"] for c in inventory if c["isolated"]),
+        "not_isolated": sorted(c["service"] for c in inventory if not c["isolated"]),
+        "control_connected": all(
+            str(v).startswith(("CONNECTED", "RESOLVED")) for v in checks.get("control_default_bridge", {}).values()
+        ) and bool(checks.get("control_default_bridge")),
+        "proxy_egress": checks.get("proxy_egress"),
+        "functional_status": (checks.get("functional_query") or {}).get("status"),
     }
 
 

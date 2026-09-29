@@ -288,17 +288,38 @@ def _canary_section(can: dict | None) -> str:
     )
 
 
-def _isolation_statement(backend: str | None) -> str:
-    """What is and isn't proven about network access. Update when Task 8's isolation test passes."""
-    return (
-        "No external services are called: embeddings and generation go to a local Ollama, and there are no cloud "
-        "APIs or telemetry. Network isolation (containers unable to reach the internet) is enforced only in the "
-        "all-Docker configuration, which Task 8 sets up and tests."
-        + (" This run used native Ollama on the host, which is outside that isolation." if backend == "native" else "")
-    )
+def _isolation_statement(backend: str | None, airgap: dict | None = None) -> str:
+    """What is and isn't proven about network access, citing the air-gap check when one is selected."""
+    text = ("No external services are called: embeddings and generation go to a local Ollama, and there are no "
+            "cloud APIs or telemetry. ")
+    if airgap and airgap["verdict"] == "PASS" and airgap["model_backend"] == "docker":
+        src = airgap["source"]
+        text += (
+            "In the all-Docker configuration, network isolation is enforced by Docker and was tested by "
+            f"<code>scripts/airgap_check.py</code> (<code>reports/{_e(src['file'])}</code>, {_e(src['started_at'])}, "
+            f"commit <code>{_e(src['git_commit'])}</code>, verdict <b>PASS</b>). The containers that handle data "
+            f"({_e(', '.join(airgap['isolated']))}) are on an internal network with no route out: connections to "
+            "public IPs, DNS lookups, and the Ollama model registry failed from inside them, while the same probe on "
+            "a normal Docker network connected (the control). A real query succeeded through the isolated stack. "
+            "The ingress proxy is the one container with a route out, because Docker can only publish ports from a "
+            "non-internal network; it holds no data and runs a static, read-only nginx config."
+        )
+    elif airgap:
+        text += (
+            f"The selected air-gap check (<code>reports/{_e(airgap['source']['file'])}</code>) did not pass: verdict "
+            f"<b>{_e(airgap['verdict'])}</b>, backend {_e(airgap['model_backend'])}. Isolation is not established for it."
+        )
+    else:
+        text += ("Network isolation is enforced only in the all-Docker configuration and is tested by "
+                 "<code>scripts/airgap_check.py</code>; no air-gap check report was selected.")
+    if backend == "native":
+        text += " This batch used native Ollama on the host, which is outside that isolation."
+    elif backend == "docker":
+        text += " This batch used the all-Docker configuration."
+    return text
 
 
-def _methodology(batch, rag, det, can) -> str:
+def _methodology(batch, rag, det, can, airgap=None) -> str:
     gw = (batch or {}).get("gateway") or {}
     env = (batch or {}).get("environment") or {}
     config_rows = "".join(
@@ -342,7 +363,7 @@ def _methodology(batch, rag, det, can) -> str:
         "PII with typed placeholders, the masked question is embedded (Ollama) and matched against policy chunks in "
         "pgvector (chunks were masked before embedding), a local LLM answers from the retrieved chunks, and citations "
         "are attached by code from the retrieved chunks, never written by the model.</p>"
-        f"<p>{_isolation_statement(gw.get('model_backend') if batch else None)}</p>"
+        f"<p>{_isolation_statement(gw.get('model_backend') if batch else None, airgap)}</p>"
         f"<h3>Configuration (reported by the gateway at run time)</h3><table>{config_rows}</table>"
         + "".join(f"<p class='warn'>{_e(m)}</p>" for m in mismatches)
         + "<h3>Latency</h3><ul>"
@@ -391,7 +412,7 @@ def headline_latency(batch: dict | None, can: dict | None) -> tuple[dict, str] |
     return latency, f"n={n}, {label}"
 
 
-def _tiles(batch, rag, det, can) -> str:
+def _tiles(batch, rag, det, can, airgap=None) -> str:
     tiles = []
     headline = headline_latency(batch, can)
     if headline:
@@ -409,13 +430,20 @@ def _tiles(batch, rag, det, can) -> str:
         tiles.append((f"{can['downstream']['total']}/{planted}", "Canaries found in answers, logs, or storage"))
     if rag and rag["answers_correct"] is not None:
         tiles.append((f"{rag['answers_correct']}/{rag['answerable']}", "RAG answers correct"))
+    if airgap:
+        tiles.append((airgap["verdict"], f"Air-gap check ({_backend_label(airgap['model_backend'])})"))
     return "<div class='tiles'>" + "".join(
         f"<div class='tile'><div class='v'>{_e(v)}</div><div class='l'>{_e(label)}</div></div>" for v, label in tiles
     ) + "</div>"
 
 
 def build_report(
-    batch: dict | None, rag: dict | None, det: dict | None, can: dict | None, generated_at: datetime | None = None
+    batch: dict | None,
+    rag: dict | None,
+    det: dict | None,
+    can: dict | None,
+    generated_at: datetime | None = None,
+    airgap: dict | None = None,
 ) -> str:
     """Return the full HTML report. Inputs are a saved batch run and summaries from `reports`."""
     generated = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
@@ -426,11 +454,11 @@ def build_report(
         "<h1>AI Evaluation Sandbox: Evaluation Report</h1>"
         f"<p class='muted'>Generated {generated}. Every number comes from a saved run named in its section. "
         "Evaluation data is synthetic; this report contains no question text.</p>"
-        + _tiles(batch, rag, det, can)
+        + _tiles(batch, rag, det, can, airgap)
         + _batch_section(batch)
         + _rag_section(rag)
         + _detector_section(det)
         + _canary_section(can)
-        + _methodology(batch, rag, det, can)
+        + _methodology(batch, rag, det, can, airgap)
         + "</main></body></html>"
     )

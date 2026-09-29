@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from report_html import build_report, combine_notes
-from reports import summarize_canary, summarize_detector, summarize_eval_rag
+from reports import summarize_airgap, summarize_canary, summarize_detector, summarize_eval_rag
 
 STAGES = {s: {"n": 200, "avg": 10.0, "p50": 9.0, "p90": 12.0, "p95": 15.0, "p99": 20.0, "min": 1.0, "max": 30.0}
           for s in ("pii_scan", "retrieval", "time_to_first_token", "generation", "total")}
@@ -65,7 +65,7 @@ def canary(not_searched, findings=None, latency_n=200):
 
 
 def build(**overrides):
-    args = {"batch": BATCH, "rag": RAG, "det": DET, "can": canary([])} | overrides
+    args = {"batch": BATCH, "rag": RAG, "det": DET, "can": canary([]), "airgap": None} | overrides
     return build_report(generated_at=datetime(2026, 1, 1, tzinfo=timezone.utc), **args)
 
 
@@ -146,9 +146,37 @@ def test_headline_latency_uses_the_largest_run_and_says_so():
     assert "n=200, dashboard batch dashboard-20260101-000000" in html
 
 
-def test_isolation_claim_is_scoped_to_what_is_enforced():
+def airgap(verdict="PASS", backend="docker"):
+    return summarize_airgap(Path("airgap_check_1.json"), {
+        "started_at": "t", "git_commit": "abc", "verdict": verdict, "model_backend": backend,
+        "problems": [] if verdict == "PASS" else ["backend is on a network with an external route"], "notes": [],
+        "checks": {
+            "inventory": [{"service": "backend", "isolated": verdict == "PASS"}, {"service": "db", "isolated": True},
+                          {"service": "proxy", "isolated": False}],
+            "control_default_bridge": {"tcp_1.1.1.1:443": "CONNECTED"}, "proxy_egress": "CONNECTED",
+            "functional_query": {"status": 200},
+        },
+    })
+
+
+def test_isolation_claim_without_an_airgap_report_is_scoped():
     html = build()
     assert "Nothing leaves the machine" not in html
     assert "No external services are called" in html
     assert "enforced only in the all-Docker configuration" in html
     assert "native Ollama on the host, which is outside that isolation" in html  # batch fixture is native
+
+
+def test_passing_airgap_check_is_cited_with_its_evidence():
+    html = build(airgap=airgap())
+    assert "airgap_check_1.json" in html and "verdict <b>PASS</b>" in html
+    assert "(backend, db)" in html  # isolated data-handling containers; proxy listed separately
+    assert "control" in html and "ingress proxy is the one container with a route out" in html
+    assert "Air-gap check (Docker Ollama" in html  # tile
+
+
+def test_failed_or_native_airgap_check_is_not_presented_as_isolation():
+    for check in (airgap("FAIL"), airgap("PASS", backend="native")):
+        html = build(airgap=check)
+        assert "Isolation is not established" in html
+        assert "network isolation is enforced by Docker" not in html

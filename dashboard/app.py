@@ -55,6 +55,7 @@ batch_path = pick("dashboard_batch", "Batch run", st.session_state.get("last_bat
 rag_path = pick("eval_rag", "RAG eval")
 det_path = pick("eval_detector", "Detector eval")
 can_path = pick("canary_audit", "Canary audit")
+airgap_path = pick("airgap_check", "Air-gap check")
 
 
 @st.cache_data(show_spinner=False)
@@ -68,6 +69,7 @@ def load_summaries(rag: Path | None, det: Path | None, can: Path | None) -> tupl
 
 rag_s, det_s, can_s = load_summaries(rag_path, det_path, can_path)
 batch_record = reports.load(batch_path) if batch_path else None
+airgap_s = reports.summarize_airgap(airgap_path, reports.load(airgap_path)) if airgap_path else None
 
 st.title("AI Evaluation Sandbox")
 tab_run, tab_results, tab_report = st.tabs(["1 · Run a batch", "2 · Results", "3 · Report"])
@@ -183,7 +185,21 @@ def source_caption(summary: dict, extra: str = "") -> None:
 
 
 with tab_results:
-    sub_rag, sub_det, sub_can = st.tabs(["RAG eval", "Detector accuracy", "Canary audit"])
+    sub_rag, sub_det, sub_can, sub_air = st.tabs(["RAG eval", "Detector accuracy", "Canary audit", "Air-gap check"])
+    with sub_air:
+        if not airgap_s:
+            st.info("No air-gap check report. Run `scripts/airgap_check.py` on the host with the stack up.")
+        else:
+            source_caption(airgap_s, f" · backend **{airgap_s['model_backend']}**")
+            c = st.columns(3)
+            c[0].metric("Verdict", airgap_s["verdict"])
+            c[1].metric("Isolated containers", len(airgap_s["isolated"]), help=", ".join(airgap_s["isolated"]))
+            c[2].metric("Control probe connected", "yes" if airgap_s["control_connected"] else "no")
+            st.write("Not isolated:", ", ".join(airgap_s["not_isolated"]) or "none")
+            for p in airgap_s["problems"]:
+                st.error(p)
+            for n in airgap_s["notes"]:
+                st.caption(n)
     with sub_rag:
         if not rag_s:
             st.info("No RAG eval report. Run `scripts/eval_rag.py` on the host.")
@@ -236,9 +252,10 @@ with tab_results:
 with tab_report:
     st.subheader("Download the report")
     st.caption("One self-contained HTML file (no external links; opens offline). Sources are the files selected in the sidebar.")
-    for label, path in (("Batch run", batch_path), ("RAG eval", rag_path), ("Detector eval", det_path), ("Canary audit", can_path)):
+    for label, path in (("Batch run", batch_path), ("RAG eval", rag_path), ("Detector eval", det_path),
+                        ("Canary audit", can_path), ("Air-gap check", airgap_path)):
         st.write(f"- **{label}:** " + (f"`{path.name}`" if path else "_none_"))
-    html = build_report(batch_record, rag_s, det_s, can_s, datetime.now(timezone.utc))
+    html = build_report(batch_record, rag_s, det_s, can_s, datetime.now(timezone.utc), airgap=airgap_s)
     name = f"sandbox_report_{(batch_record or {}).get('run_id', 'no-batch')}.html"
     st.download_button("Download HTML report", html, file_name=name, mime="text/html", type="primary")
     with st.expander("Preview"):
