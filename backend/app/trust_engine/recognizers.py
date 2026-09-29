@@ -116,6 +116,8 @@ class ContextualPhoneRecognizer(PhoneRecognizer):
     def analyze(self, text: str, entities: list[str], nlp_artifacts: NlpArtifacts = None) -> list[RecognizerResult]:
         results = super().analyze(text, entities, nlp_artifacts)
         for result in results:
-            if re.fullmatch(r"\d+", text[result.start : result.end]):
+            # .strip(): python-phonenumbers can include surrounding whitespace in
+            # the span (" 9826204505"), which would dodge a bare-digit check.
+            if re.fullmatch(r"\d+", text[result.start : result.end].strip()):
                 result.score = CONTEXT_ONLY_SCORE
         return results

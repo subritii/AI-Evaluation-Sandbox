@@ -71,6 +71,8 @@ def test_repeated_value_reuses_its_placeholder_number():
         "Routing number 021000022 was rejected.",
         # A bare 10-digit ID is not a phone or account number without context.
         "Order 4417123456 shipped on Monday.",
+        # Same, after a separator (phonenumbers returns this span with a leading space).
+        "Please send the funds to 010524275 / 9826204505 today.",
         # Well-known invalid SSN; Presidio rejects it by design.
         "Example SSN format: 123-45-6789.",
         # Policy language: amounts, thresholds, durations, section numbers.
