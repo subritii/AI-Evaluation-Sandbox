@@ -1,7 +1,8 @@
 # Secure Enterprise AI Evaluation Sandbox
 #
-# Services: Postgres + pgvector (vector store), Ollama (local models), and the
-# FastAPI gateway (`backend`, also used for one-off ingest/test commands).
+# Services: Postgres + pgvector (vector store), Ollama (local models), the
+# FastAPI gateway (`backend`, also used for one-off ingest/test commands), and
+# the Streamlit dashboard.
 # Task 8 moves everything onto an `internal: true` network for the air-gap proof.
 name: ai-eval-sandbox
 
@@ -77,6 +78,30 @@ services:
       db:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-8501}:8501"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    environment:
+      # Talks only to the gateway; it gets no database credentials.
+      GATEWAY_URL: http://backend:8000
+      REPORTS_DIR: /reports
+    volumes:
+      # Mount source so code edits don't need an image rebuild.
+      - ./dashboard:/code
+      # Reads saved eval reports; writes dashboard batch runs (no question text).
+      - ./reports:/reports
+      - ./data/sample_batches:/data/sample_batches:ro
+    depends_on:
+      backend:
         condition: service_healthy
 
 volumes:

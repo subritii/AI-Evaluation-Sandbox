@@ -1,0 +1,5 @@
+# Pinned so the UI API (widget arguments) doesn't shift under us. Brings
+# pandas and altair, used for tables and the live latency chart.
+streamlit==1.64.0
+httpx>=0.27
+pytest>=8.0

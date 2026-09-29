@@ -1,4 +1,4 @@
-"""FastAPI gateway: POST /query and GET /metrics/{run_id}.
+"""FastAPI gateway: POST /query, GET /metrics/{run_id}, and GET /info.
 
 Run (Compose starts this by default):
     uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -9,6 +9,7 @@ records method, path, and status, never bodies.
 """
 
 import logging
+import os
 import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
@@ -26,6 +27,7 @@ from app.metrics.latency import ModelConfig, record_samples, run_metrics
 from app.rag.ollama_client import OllamaClient, OllamaError
 from app.rag.pipeline import run_query
 from app.trust_engine import scrub
+from app.trust_engine.engine import scrubber_id
 
 # uvicorn configures only its own loggers; give ours a handler too.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -104,6 +106,26 @@ class QueryResponse(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/info")
+def info() -> dict:
+    """Non-secret configuration behind this gateway, for reports and the dashboard.
+
+    `load_avg` is measured where the gateway runs: on macOS with Docker
+    Desktop that's the Linux VM, not the Mac itself.
+    """
+    settings = get_settings()
+    return {
+        "model_backend": settings.model_backend,
+        "llm_model": settings.llm_model,
+        "embed_model": settings.embed_model,
+        "temperature": settings.llm_temperature,
+        "max_tokens": settings.llm_max_tokens,
+        "scrubber": scrubber_id(),
+        "load_avg": list(os.getloadavg()),
+        "cpus": os.cpu_count(),
+    }
 
 
 @app.post("/query", response_model=QueryResponse)

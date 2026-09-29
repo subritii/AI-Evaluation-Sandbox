@@ -1,0 +1,16 @@
+# Rule 3: no telemetry. Streamlit sends usage statistics unless this is off.
+[browser]
+gatherUsageStats = false
+# Rule 3 again: bound to 0.0.0.0 with no server address, Streamlit calls
+# checkip.amazonaws.com at startup to print an "External URL". Naming the
+# address users open skips that lookup (and the port is loopback-only anyway).
+serverAddress = "localhost"
+
+[server]
+headless = true
+# Batches are text; 5 MB is ~1,000 long questions with room to spare.
+maxUploadSize = 5
+runOnSave = false
+
+[client]
+toolbarMode = "minimal"

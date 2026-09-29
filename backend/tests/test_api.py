@@ -129,6 +129,14 @@ def test_latency_samples_record_model_config(client, fake_ollama, run_id):
     assert models == [dict(zip(("model_backend", "llm_model", "embed_model"), expected), requests=1)]
 
 
+def test_info_reports_config_without_secrets(client):
+    info = client.get("/info").json()
+    settings = get_settings()
+    assert info["model_backend"] == settings.model_backend and info["llm_model"] == settings.llm_model
+    assert info["scrubber"].startswith("presidio-") and len(info["load_avg"]) == 3
+    assert settings.postgres_password not in str(info)
+
+
 def test_metrics_unknown_run_is_404(client):
     assert client.get("/metrics/no-such-run").status_code == 404
 
