@@ -12,7 +12,7 @@ if [[ -f .env ]]; then
   set -a; source .env; set +a
 fi
 EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
-LLM_MODEL="${LLM_MODEL:-llama3}"
+LLM_MODEL="${LLM_MODEL:-llama3.2:3b}"
 
 if ! docker compose ps --status running --services | grep -qx ollama; then
   echo "Ollama container is not running. Start it first: docker compose up -d db ollama" >&2

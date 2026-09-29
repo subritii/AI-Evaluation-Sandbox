@@ -36,7 +36,7 @@ flowchart LR
 | Gateway | FastAPI (Python 3.11+) | Orchestrates scrub → retrieve → generate; times each stage |
 | Trust Engine | Microsoft Presidio + custom recognizers | Detects and masks PII |
 | Vector store | PostgreSQL 16 + pgvector | Embedded policy docs; row-level security for tenant isolation |
-| Models | Ollama (`llama3`, `nomic-embed-text`) | Local generation and local embeddings |
+| Models | Ollama (`llama3.2:3b`, `nomic-embed-text`) | Local generation and local embeddings |
 | Dashboard | Streamlit | Upload, live latency chart, results, report download |
 | Packaging | Docker Compose | One-command start on an internal-only network |
 

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # Ollama (the only model endpoint; no cloud APIs).
     ollama_base_url: str = "http://localhost:11434"
     embed_model: str = "nomic-embed-text"
-    llm_model: str = "llama3"
+    llm_model: str = "llama3.2:3b"
     # Must match the `vector(N)` column in db/schema.sql. nomic-embed-text -> 768.
     embed_dim: int = 768
 
