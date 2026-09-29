@@ -148,11 +148,11 @@ Host-side scripts (`.venv/bin/python scripts/...`) use `OLLAMA_BASE_URL=http://l
 
 | Metric | Result | How to reproduce |
 |---|---|---|
-| PII detector recall (overall) | 89.1% (precision 99.8%) on 1,000 synthetic records; per-entity table in `docs/build-log.md` | `python scripts/generate_dataset.py && python scripts/eval_detector.py` |
-| Canary leakage | 50/207 synthetic canaries found, all in the masked question sent to the models (Trust Engine misses: bare digits without context, rare card formats, some names); 0 in answers, container logs, or database. Native Ollama server log not searched. (**native Ollama** run, n=200) | `python scripts/canary_audit.py` |
+| PII detector recall (overall) | 90.1% (precision 99.8%) on 1,000 synthetic records, rules-v2; per-entity table and before/after in `docs/build-log.md` | `python scripts/generate_dataset.py && python scripts/eval_detector.py` |
+| Canary leakage | 43/207 synthetic canaries found (50 before the card-format fix), all in the masked question sent to the models (Trust Engine misses: bare digits without context, some names); 0 in answers, backend/db logs, native Ollama log, or database. (**native Ollama** run, n=200) | `python scripts/canary_audit.py --ollama-log ollama.log` |
 | Cross-tenant retrievals | — | `python scripts/isolation_test.py` |
-| Security layer latency (P95) | 126 ms PII scan (P50 35 ms, P99 307 ms), n=200, **native Ollama**, llama3.2:3b | `python scripts/canary_audit.py` |
-| End-to-end latency (P95) | 3,590 ms (P50 1,734 ms), n=200, **native Ollama**, llama3.2:3b | `python scripts/canary_audit.py` |
+| Security layer latency (P95) | 92 ms PII scan (P50 34 ms, P99 203 ms), n=200, **native Ollama**, llama3.2:3b; 126 ms in an earlier run under heavier host load | `python scripts/canary_audit.py` |
+| End-to-end latency (P95) | 3,341 ms (P50 1,600 ms), n=200, **native Ollama**, llama3.2:3b; 3,590 ms in an earlier run under heavier host load | `python scripts/canary_audit.py` |
 | RAG answers / citations | 9/9 correct, 2/2 refusals, evidence cited 9/9 (11 questions, **native Ollama**, llama3.2:3b) | `MODEL_BACKEND=native python scripts/eval_rag.py` |
 
 ## Design Decisions

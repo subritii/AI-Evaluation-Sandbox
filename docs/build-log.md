@@ -256,3 +256,86 @@ run `ollama serve > ollama.log 2>&1` and pass `--ollama-log ollama.log`.
 A 20-request smoke test ran first (`reports/canary_audit_20260929-195550.json`,
 6/21 found, same pattern). Its latency rows predate the model-config columns
 and are stored as `unknown`.
+
+### Fix: four card formats Presidio's pattern missed (commit `9e69f46`)
+
+Presidio's card regex only accepts 13-17 digits starting with 1, 3, 4, 50-55,
+or 6. The 7 cards leaked in the canary audit, and the 18 card misses in the
+detector eval, were 4 Luhn-valid formats outside that pattern: 12-digit Maestro
+(4 of the 7), 19-digit Visa (1), 2-series Mastercard 2221-2720 (1), and 15-digit
+JCB 2131 (1). `BankCardRecognizer` now handles them in two tiers:
+
+- **13-17 digits:** Luhn alone flags the number, as before, now with the
+  2221-2720 and 2131 prefixes added.
+- **12, 18, 19 digits:** Luhn **plus** a card context word ("card", "debit",
+  "visa", ...). About 1 in 10 random numbers pass Luhn, and bare 12-digit
+  strings are common (account numbers, order IDs), so Luhn alone would
+  over-mask. Unit tests cover the negatives: no context, failed Luhn, and
+  account context.
+
+Rules version bumped to `v2`, and the policy chunks were re-ingested (19 rows,
+`...+rules-v2`, 0 masked entities).
+
+**Caveat:** this change was driven by misses in this same detector dataset
+and canary set, unlike the Task 2 recognizers. The "after" recall is therefore
+optimistic for these formats. All dataset card cases have a card word nearby,
+so the eval can't show the context-required tier's behavior on bare numbers;
+the unit tests cover that.
+
+**Detector eval** (same dataset, sha256 `50e7fbd690777a54…`):
+before `reports/eval_detector_20260929-203456.json` (rules-v1, reproduces the
+Task 2 table exactly) → after `reports/eval_detector_20260929-203620.json`
+(rules-v2).
+
+| Metric | Before (v1) | After (v2) |
+|---|---:|---:|
+| CREDIT_CARD recall | 79.8% (71/89) | **100.0% (89/89)** |
+| CREDIT_CARD precision | 100.0% | 100.0% |
+| Overall recall (micro) | 89.1% (1606/1802) | **90.1% (1624/1802)** |
+| Overall precision | 99.8% (4 FP) | 99.8% (4 FP) |
+| Standard templates recall | 96.2% | 97.5% |
+| Hard templates recall | 67.2% | 67.2% |
+| No-PII records with a detection | 3 of 150 | 3 of 150 |
+| `pii_scan` per record, P95 (host) | 5.65 ms | 6.2 ms |
+
+All other entity rows are unchanged.
+
+**Canary audit, native Ollama** (same seed 2026, 200 requests, 207 canaries):
+before `reports/canary_audit_20260929-200203.json` → after
+`reports/canary_audit_20260929-203656.json` (run `canary-20260929-203656`,
+gateway reported `backend=native`, llama3.2:3b, nomic-embed-text).
+
+| Entity | Planted | Found before | Found after |
+|---|---:|---:|---:|
+| CREDIT_CARD | 18 | 7 | **0** |
+| US_ROUTING_NUMBER | 37 | 17 | 17 |
+| ACCOUNT_NUMBER | 37 | 17 | 17 |
+| PERSON | 51 | 9 | 9 |
+| SSN, IBAN, email, phone | 64 | 0 | 0 |
+| **Total** | 207 | **50** | **43** |
+
+The remaining 43 are all `no_context_wire` digits (34) and missed names (9),
+unchanged. All 43 were found only in `masked_question`.
+
+**The native Ollama log was searched this time.** `ollama serve` was
+restarted with its output going to `ollama.log`, and the audit read the part
+written during the run (about 1 MB, 203 chat and 204 embed requests). It
+contained 0 canaries. The 43 unmasked values *were* sent to Ollama, so this
+also shows that Ollama 0.34.4 at default verbosity doesn't write prompt text
+to its log. Answers, backend and db logs, and every database text column
+also contained 0.
+
+Latency in the rerun (ms, n=200):
+
+| Stage | P50 | P90 | P95 | P99 |
+|---|---:|---:|---:|---:|
+| **pii_scan** | 34 | 62 | **92** | 203 |
+| retrieval | 46 | 73 | 84 | 149 |
+| time_to_first_token | 192 | 1,565 | 1,752 | 2,188 |
+| generation | 1,186 | 1,982 | 2,134 | 2,241 |
+| **total** | 1,600 | 3,098 | **3,341** | 3,647 |
+
+This run is faster than the first (pii_scan P95 126 → 92 ms, total P95 3,590 →
+3,341 ms), but host load average was 2.2-4.1 instead of 5.3-7.7. The difference
+is mostly machine load, not the recognizer change: the detector eval, which
+measures pii_scan in isolation, shows no speedup.
