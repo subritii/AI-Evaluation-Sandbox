@@ -205,7 +205,9 @@ def run_case(case: EvalCase, client: OllamaClient, conn, settings, top_k: int, r
         t_gen_start = time.perf_counter()
         t_first = None
         fragments: list[str] = []
-        for fragment in client.chat_stream(settings.llm_model, build_messages(case.question, chunks)):
+        for fragment in client.chat_stream(
+            settings.llm_model, build_messages(case.question, chunks), temperature=settings.llm_temperature
+        ):
             if t_first is None:
                 t_first = time.perf_counter()
             fragments.append(fragment)
@@ -314,8 +316,7 @@ def main() -> None:
             "chunk_size": settings.chunk_size,
             "chunk_overlap": settings.chunk_overlap,
             "chunks_in_db": chunk_count,
-            # chat_stream sends no sampling options, so answers can vary between runs.
-            "temperature": "ollama default (not set)",
+            "temperature": None if args.retrieve_only else settings.llm_temperature,
         },
         "results": [asdict(r) for r in results],
     }

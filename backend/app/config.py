@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     embed_model: str = "nomic-embed-text"
     llm_model: str = "llama3.2:3b"
+    # 0 = greedy decoding: the same question and context give the same answer,
+    # which compliance Q&A and reproducible eval metrics both need.
+    llm_temperature: float = 0.0
     # Must match the `vector(N)` column in db/schema.sql. nomic-embed-text -> 768.
     embed_dim: int = 768
 

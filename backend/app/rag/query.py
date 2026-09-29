@@ -67,7 +67,9 @@ def main() -> None:
             print(f"\nAnswer ({settings.llm_model}):\n")
             t_gen_start = time.perf_counter()
             t_first = None
-            for fragment in client.chat_stream(settings.llm_model, build_messages(args.question, chunks)):
+            for fragment in client.chat_stream(
+                settings.llm_model, build_messages(args.question, chunks), temperature=settings.llm_temperature
+            ):
                 if t_first is None:
                     t_first = time.perf_counter()
                 print(fragment, end="", flush=True)

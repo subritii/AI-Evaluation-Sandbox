@@ -58,6 +58,7 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
       POLICIES_DIR: /data/policies
     volumes:
       # Mount source so code edits don't need an image rebuild.
