@@ -113,6 +113,10 @@ docker compose up -d
 .venv/bin/python scripts/airgap_check.py
 ```
 
+Hardware sizing, the configuration reference, and fixes for common problems
+(disk space, Docker Desktop, iCloud and Spotlight, port conflicts, stale
+`.env` files) are in [`docs/runbook.md`](docs/runbook.md).
+
 ### Network isolation
 
 Every container that handles data (db, ollama, ingest, backend, dashboard,
@@ -176,6 +180,8 @@ Ingest runs on every start, so stored and query embeddings always come from the 
 - [x] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.
 - [x] **Task 7: Dashboard + report.** Streamlit upload, live latency chart, results panel, downloadable report with methodology.
 - [x] **Task 8: Packaging + air-gap proof.** Dockerfiles, `internal: true` network, one-command start.
+- [ ] **Task 9: Model endpoint switch.** Ollama or any OpenAI-compatible endpoint, chosen in `.env`; Trust Engine and audits unchanged.
+- [x] **Task 11: Runbook.** `docs/runbook.md`: hardware, install, config reference, known issues.
 
 **Stretch**
 
