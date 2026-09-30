@@ -574,3 +574,115 @@ all-Docker canary run would take about 2 hours on CPU and hasn't been run.
   (`airgap_check_20260929-212849.json`) cites `1f9e6cc-dirty`. I stopped the
   eval, committed, and reran everything from `2ef114f`; those are the reports
   cited above.
+
+---
+
+## Maintenance (2026-09-30)
+
+- **Pruned Docker build cache.** `docker builder prune -f` freed 1.7 GB
+  inside Docker. macOS free space didn't change right away: `Docker.raw` stayed
+  at 15 GB, because Docker Desktop's disk image doesn't shrink as soon as space
+  is freed inside it. Recorded in the runbook.
+- **Dashboard default report.** Canary audits now default to the run with
+  the most latency samples (the 200-request native run) rather than the newest
+  (a 20-request all-Docker run), because they feed the headline latency tiles.
+  Other report kinds stay newest-first (commit `e7f7214`).
+
+---
+
+## Task 11: Runbook
+
+`docs/runbook.md` (commit `cf01c89`): measured hardware needs, install, daily
+operations, the all-Docker vs native configurations (including the
+`COMPOSE_FILE` trap), a reference for every setting with its precedence, and
+fixes for the problems hit while building this. Where an entry describes
+what happened here, it says so. Entries not observed directly (a corrupted
+Docker disk, Docker Desktop not launching) give the standard recovery steps
+without inventing details, and destructive steps are marked.
+
+Checking the working `.env` against `.env.example` (key names only) found
+real drift: `MODEL_BACKEND`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, and both
+proxy port keys were missing (code defaults applied, and host-run scripts
+recorded `model_backend=unknown` unless it was typed inline), while two
+obsolete port keys remained. The `.env` wasn't edited; the runbook gives the
+check.
+
+---
+
+## Task 9: Ollama or any OpenAI-compatible endpoint
+
+### What
+
+`LLM_PROVIDER` and `EMBED_PROVIDER` (`ollama` | `openai_compatible`) choose
+the API for each model; `OPENAI_BASE_URL` and `OPENAI_API_KEY` configure the
+endpoint. Tested end to end by pointing both providers at Ollama's own
+OpenAI-compatible API (`http://ollama:11434/v1`) inside the sandbox, all from
+commit `0682c2f`, all-Docker (CPU):
+
+| Check | `ollama` API (Task 8 runs) | `openai_compatible` API |
+|---|---|---|
+| Air-gap check | PASS | **PASS** (`airgap_check_20260930-160446.json`): endpoint is in-network |
+| RAG retrieval, expected chunk in top 4 | 9/9 (8 at rank 1) | **9/9 (8 at rank 1)**, same ranks per question |
+| Correct answers / refusals | 9/9 / 2/2 | **9/9 / 2/2** |
+| Evidence cited, citation precision | 9/9, 100% | **9/9, 100%** (`eval_rag_20260930-160653.json`) |
+| Canaries unmasked / found downstream (20 requests) | 6/21 / 0/21 | **6/21 / 0/21** (`canary_audit_20260930-161023.json`) |
+
+The Trust Engine results are identical, as they should be: masking happens
+before either provider is called. Latency isn't compared across these runs:
+host load was 12-13 in the second run and 17-29 in the first, on CPU.
+
+### How
+
+- `app/rag/model_client.py`: `OpenAICompatibleClient` streams
+  `/chat/completions` (server-sent events, `data: {...}` lines until
+  `[DONE]`) and calls `/embeddings` (reordered by `index`). `ModelClient`
+  routes `embed()` and `chat_stream()` to their providers, sharing one client
+  when both are the same. The pipeline, Trust Engine, ingest, and eval call it
+  exactly as they called the Ollama client.
+- Errors from either provider are `ModelServerError` (the gateway still
+  returns 502 and logs the type only).
+- Recording: `/info`, every `latency_samples` row (new `llm_provider` and
+  `embed_provider` columns), `GET /metrics`, the RAG eval config, and the HTML
+  report carry provider and endpoint. `MODEL_BACKEND` gained `remote`.
+- Tests: 16 new (`test_model_client.py`, via `httpx.MockTransport`): SSE
+  parsing including keep-alives, empty deltas, and `[DONE]`; embedding order;
+  auth header present only with a key; errors (401, 404, 500, and a
+  mid-stream error) raised without the key; provider selection; config
+  validation; credentials stripped from reported URLs; the key absent from
+  `repr` and `/info`. Backend suite: 82 passed + 1 xfail; dashboard: 33.
+
+### Why
+
+- **Per-model providers.** A common real setup is keeping embeddings local
+  (no documents leave) while generation moves to a bigger model. One switch
+  for both would force both to move.
+- **Masking still happens before any provider is called.** The provider
+  sits behind the same two calls the pipeline already made after the Trust
+  Engine, so "Trust Engine and audits unchanged" is a property of the design,
+  not something each provider has to get right. The identical canary result
+  above is the check.
+- **Why "remote" is its own label and override.** Where the model runs is the
+  biggest factor in both latency and data exposure. An endpoint outside the
+  sandbox can't be reached without giving the backend a route out, so that
+  path is an explicit Compose override, labeled `remote`, and fails the
+  air-gap check. Supporting it through `.env` alone would have quietly
+  weakened isolation.
+- **Tested against Ollama's `/v1` instead of a cloud API.** It exercises the
+  real OpenAI wire format end to end while staying inside the rules: no
+  external calls, air-gap intact.
+- **Existing latency rows labeled `ollama`, not `unknown`.** Before this
+  change the code could only call Ollama, so that label is a fact.
+- **Rule 3 in CLAUDE.md was reworded** from "Ollama only" to "a model server
+  the operator controls; external endpoints only as a labeled, non-isolated
+  opt-in", because the task deliberately changes what that rule allowed.
+
+### Known limitations
+
+- Only tested against Ollama's OpenAI-compatible API; other servers differ in
+  small ways (e.g. whether `max_tokens` or `max_completion_tokens` is
+  accepted, error formats). The client sends the widely supported fields.
+- The nomic task prefixes are added for every embedding provider; with a
+  different embedding model they're harmless text, but retrieval must be
+  re-measured.
+- Embeddings must stay 768-dimensional without a schema change.
+- The `ollama` container starts even when neither model uses it.

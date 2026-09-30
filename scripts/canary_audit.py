@@ -309,8 +309,9 @@ def main() -> None:
     if metrics:
         print_latency(metrics)
     for m in models:
-        print(f"Model config (from gateway): backend={m['model_backend']} llm={m['llm_model']} "
-              f"embed={m['embed_model']} ({m['requests']} requests)")
+        print(f"Model config (from gateway): backend={m['model_backend']} "
+              f"llm={m['llm_model']} via {m.get('llm_provider', 'ollama')} "
+              f"embed={m['embed_model']} via {m.get('embed_provider', 'ollama')} ({m['requests']} requests)")
     print(f"\nRequests: {dict(status_counts)}   wall time {wall_s / 60:.1f} min   "
           f"host load avg (1m) {load_before[0]:.1f} -> {load_after[0]:.1f}")
     print(f"\nCanaries planted: {len(planted)} in {sum(bool(i['canaries']) for i in batch)} requests (synthetic)")

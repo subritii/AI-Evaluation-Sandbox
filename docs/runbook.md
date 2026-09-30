@@ -69,7 +69,7 @@ the one-shot `ingest` to embed the policy documents.
 | Start / stop | `docker compose up -d` / `docker compose down` (keeps volumes) |
 | Status | `docker compose ps` |
 | Logs | `docker compose logs -f backend` (never contains request bodies) |
-| Which config is running? | `curl -s localhost:8000/info` → `model_backend`, models, scrubber, load |
+| Which config is running? | `curl -s localhost:8000/info` → backend, provider and endpoint per model, models, scrubber, load |
 | Tests | `docker compose run --rm backend pytest` and `docker compose run --rm --no-deps dashboard pytest` |
 | RAG eval | `docker compose run --rm tools python scripts/eval_rag.py` |
 | Detector eval | `.venv/bin/python scripts/generate_dataset.py && .venv/bin/python scripts/eval_detector.py` |
@@ -105,6 +105,37 @@ uses the native configuration, including the ones in this runbook. Check with
 `echo $COMPOSE_FILE` and `grep COMPOSE_FILE .env`. The symptom is `/info`
 reporting `native` when you expected `docker`, or the air-gap check failing.
 
+### Using an OpenAI-compatible endpoint
+
+Set in `.env` (per model; embeddings and generation can differ):
+
+```bash
+LLM_PROVIDER=openai_compatible
+EMBED_PROVIDER=openai_compatible        # or keep ollama for embeddings
+OPENAI_BASE_URL=http://my-vllm:8000/v1
+OPENAI_API_KEY=                          # if the server needs one
+LLM_MODEL=<model name on that server>
+```
+
+| Where the endpoint runs | How to start | Isolated? |
+|---|---|---|
+| A container on the `sandbox` network (e.g. vLLM added to Compose), or Ollama's own `/v1` | `docker compose up -d` | **Yes**: air-gap check PASS (tested with `http://ollama:11434/v1`) |
+| On this Mac (LM Studio, llama.cpp server) | `docker compose -f docker-compose.yml -f docker-compose.external-endpoint.yml up -d`, base URL `http://host.docker.internal:<port>/v1`, `MODEL_BACKEND=native` | No |
+| Another machine (private vLLM, Azure OpenAI) | same override, `MODEL_BACKEND=remote` (the default there) | No, and masked text leaves this machine |
+
+Things to check:
+
+- Embeddings must be 768-dimensional (`db/schema.sql`), or ingest stops with a
+  dimension error. Changing dimension means changing the schema and
+  re-ingesting.
+- The nomic task prefixes (`search_query: ` / `search_document: `) are added
+  for every provider. They help nomic models and are harmless text for others,
+  but retrieval quality with a different embedding model must be re-measured
+  with `eval_rag.py`.
+- Ingest runs on every start, so switching `EMBED_PROVIDER` re-embeds the policies
+  through the new endpoint automatically.
+- The `ollama` container still starts even if neither model uses it.
+
 **Labels are not optional.** Every latency sample and report records the
 backend, and the dashboard and HTML report print it next to every latency
 number. Never compare numbers across configurations without saying so.
@@ -125,7 +156,11 @@ reads `.env` to fill `${VAR:-default}` placeholders. See
 | `POSTGRES_USER` / `POSTGRES_DB` | `sandbox` / `sandbox` | db, backend | |
 | `POSTGRES_HOST` / `POSTGRES_PORT` | `localhost` / `5432` | backend settings | Compose sets `db` / `5432` inside containers; a `.env` value only affects host-run code, and the DB has no host port |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | backend settings | Compose sets `http://ollama:11434` (all-Docker) or `http://host.docker.internal:11434` (native) |
-| `MODEL_BACKEND` | `unknown` | every latency sample and report | `docker` / `native`; set by the compose files. Host-run code records `unknown` unless set |
+| `MODEL_BACKEND` | `unknown` | every latency sample and report | Where the model server runs: `docker` / `native` / `remote`; set by the compose files. Host-run code records `unknown` unless set |
+| `LLM_PROVIDER` | `ollama` | generation | `ollama` or `openai_compatible` |
+| `EMBED_PROVIDER` | `ollama` | embeddings (ingest and queries) | `ollama` or `openai_compatible`; independent of `LLM_PROVIDER` |
+| `OPENAI_BASE_URL` | empty | OpenAI-compatible client | Required if either provider is `openai_compatible`, e.g. `http://ollama:11434/v1`. Recorded in reports with credentials stripped |
+| `OPENAI_API_KEY` | empty | OpenAI-compatible client | **Secret.** Sent only as an `Authorization` header; never logged, returned by `/info`, or written to reports |
 | `LLM_MODEL` | `llama3.2:3b` | generation, pull script | Changing it needs `./scripts/pull_models.sh` |
 | `EMBED_MODEL` | `nomic-embed-text` | embeddings, pull script | Must produce 768-dim vectors (`embed_dim`), or change `db/schema.sql` and re-ingest |
 | `LLM_TEMPERATURE` | `0` | generation | 0 = greedy, reproducible answers |
@@ -259,6 +294,12 @@ build machine.
   3. See what the running gateway uses: `curl -s localhost:8000/info`.
   4. Remember that the compose `environment:` block wins inside containers
      (e.g. `POSTGRES_HOST: db`), so a `.env` value can look ignored there.
+
+### `docker compose config` prints secrets
+
+- `docker compose config` resolves `.env` into plain text, including
+  `POSTGRES_PASSWORD` and `OPENAI_API_KEY`. Pipe it through `grep` for the
+  keys you need, and don't paste its full output into tickets or chats.
 
 ### Streamlit shows old code after an edit
 

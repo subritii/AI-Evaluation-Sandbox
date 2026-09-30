@@ -17,7 +17,7 @@ This is a portfolio project for Solutions Engineer roles. The owner is building 
 
 - Python 3.11+, FastAPI, Pydantic settings
 - PostgreSQL 16 + pgvector (`pgvector/pgvector:pg16` image), psycopg / SQLAlchemy
-- Ollama: `llama3.2:3b` for generation, `nomic-embed-text` for embeddings
+- Ollama: `llama3.2:3b` for generation, `nomic-embed-text` for embeddings (default provider); any OpenAI-compatible endpoint can replace either via `LLM_PROVIDER` / `EMBED_PROVIDER` (`backend/app/rag/model_client.py`)
 - Microsoft Presidio analyzer with custom recognizers; masking (typed, numbered placeholders) is our own code in `trust_engine/engine.py`
 - LangChain for text splitting only; files load directly (pypdf for PDFs), since the langchain-community loaders are deprecated
 - Streamlit dashboard
@@ -28,7 +28,7 @@ This is a portfolio project for Solutions Engineer roles. The owner is building 
 
 1. **Never log raw PII.** Do not log request or response bodies before they pass through the Trust Engine. No `print()` of user text in the gateway.
 2. **Anonymize before embedding.** Nothing is written to the vector table without passing through the Trust Engine.
-3. **No external network calls at runtime.** Embeddings and generation go through Ollama only. No cloud APIs, no telemetry. (Pulling models during setup is the only exception.)
+3. **No external network calls at runtime by default.** Embeddings and generation go to a model server the operator controls: Ollama by default, or an OpenAI-compatible endpoint chosen in `.env` (Task 9). The default all-Docker configuration must pass `scripts/airgap_check.py`. An endpoint outside the sandbox network is an explicit opt-in (`docker-compose.external-endpoint.yml`), recorded as `model_backend=remote`, and reported as not isolated. No telemetry and no third-party calls from code. (Pulling models and building images during setup is the only other exception.)
 4. **Honest metrics.** Never hardcode or fabricate results. Every number shown in the dashboard or report must come from a real run and be reproducible from a script.
 5. **Label simulations.** Anything injected or simulated (e.g., fault injection) must be labeled as such in data and UI.
 6. **Tenant scoping.** Once Task 5 lands, every query touching documents must run with a tenant context; rely on Postgres row-level security, not only app-level filtering.
@@ -46,6 +46,8 @@ This is a portfolio project for Solutions Engineer roles. The owner is building 
 
 ## Commands
 
+Operations, configuration reference, and fixes for known setup issues: `docs/runbook.md`.
+
 ```bash
 ./scripts/pull_models.sh                # one-time model pull (setup network; the only internet step)
 docker compose up -d                    # start everything (ingests, then isolated stack + proxy)
@@ -58,4 +60,4 @@ docker compose logs -f backend          # backend logs
 
 ## Current focus
 
-Update this line as work progresses: **Core tasks 1-4 and 6-8 done (+ lean Task 3). The all-Docker stack is isolated on an internal network and proven by `airgap_check.py` (PASS; native override correctly FAILs). Next: stretch Task 5 (multi-tenancy with RLS); optionally a 200-request all-Docker canary run (~2 h on CPU).**
+Update this line as work progresses: **Tasks 1-4, 6-9, and 11 done (+ lean Task 3). All-Docker stack isolated and proven by `airgap_check.py`; models switchable between Ollama and any OpenAI-compatible endpoint (Task 9, tested end to end via Ollama's /v1 with the air-gap intact); runbook in `docs/runbook.md`. Next: Task 5 (multi-tenancy with Postgres RLS). Task 10 is not defined yet. Optional: a 200-request all-Docker canary run (~2 h on CPU).**

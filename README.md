@@ -170,6 +170,18 @@ docker compose -f docker-compose.yml -f docker-compose.native-ollama.yml up -d  
 
 Ingest runs on every start, so stored and query embeddings always come from the same runtime.
 
+### Model providers: Ollama or any OpenAI-compatible endpoint
+
+`LLM_PROVIDER` and `EMBED_PROVIDER` in `.env` pick `ollama` (default) or
+`openai_compatible` for each model, with `OPENAI_BASE_URL` / `OPENAI_API_KEY`
+for the endpoint (vLLM, llama.cpp, LM Studio, a private Azure OpenAI
+deployment, or Ollama's own `/v1`). The Trust Engine masks the question before
+either provider sees it, and the audits run unchanged. Every report and
+latency sample records the provider and endpoint; the key is never recorded.
+An endpoint on the sandbox network keeps the air-gap; one outside it needs
+`docker-compose.external-endpoint.yml` and is reported as not isolated. See
+[`docs/runbook.md`](docs/runbook.md#using-an-openai-compatible-endpoint).
+
 ## Build Roadmap
 
 **Core**
@@ -180,7 +192,7 @@ Ingest runs on every start, so stored and query embeddings always come from the 
 - [x] **Task 6: Canary leakage audit.** Plant known fake PII; scan responses, logs, and vector table after each run.
 - [x] **Task 7: Dashboard + report.** Streamlit upload, live latency chart, results panel, downloadable report with methodology.
 - [x] **Task 8: Packaging + air-gap proof.** Dockerfiles, `internal: true` network, one-command start.
-- [ ] **Task 9: Model endpoint switch.** Ollama or any OpenAI-compatible endpoint, chosen in `.env`; Trust Engine and audits unchanged.
+- [x] **Task 9: Model endpoint switch.** Ollama or any OpenAI-compatible endpoint, chosen in `.env`; Trust Engine and audits unchanged.
 - [x] **Task 11: Runbook.** `docs/runbook.md`: hardware, install, config reference, known issues.
 
 **Stretch**
@@ -203,7 +215,7 @@ Ingest runs on every start, so stored and query embeddings always come from the 
 | Cross-tenant retrievals | — | `python scripts/isolation_test.py` |
 | Security layer latency (PII scan P95) | 92 ms (native, n=200); 364 ms (all-Docker, n=20, host load 17-29) | `python scripts/canary_audit.py` |
 | End-to-end latency (P95) | 3.3 s (native, n=200); 26.7 s (all-Docker, n=20) | `python scripts/canary_audit.py` |
-| RAG answers / citations | 9/9 correct, 2/2 refusals, evidence cited 9/9 on both native and all-Docker (11 questions, llama3.2:3b) | `docker compose run --rm tools python scripts/eval_rag.py` |
+| RAG answers / citations | 9/9 correct, 2/2 refusals, evidence cited 9/9 on native, all-Docker, and all-Docker through the OpenAI-compatible API (11 questions, llama3.2:3b) | `docker compose run --rm tools python scripts/eval_rag.py` |
 
 ## Design Decisions
 
