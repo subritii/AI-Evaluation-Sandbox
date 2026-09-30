@@ -1,0 +1,74 @@
+# Backend and dashboard tests on every push and pull request.
+#
+# No model server runs in CI. Tests marked `requires_ollama` (backend/tests/
+# test_ollama_live.py) are skipped with the reason shown in the log (-rs). The
+# gateway API tests still run: with an empty database, a fixture ingests the
+# real policy through the real Trust Engine using a fake embedder
+# (backend/tests/conftest.py). No test needs a GPU.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: sandbox
+          # Not a secret: a throwaway database that exists only for this job.
+          POSTGRES_PASSWORD: ci-throwaway-password
+          POSTGRES_DB: sandbox
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sandbox -d sandbox"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: sandbox
+      POSTGRES_PASSWORD: ci-throwaway-password
+      POSTGRES_DB: sandbox
+      # Nothing listens here: requires_ollama tests skip.
+      OLLAMA_BASE_URL: http://localhost:11434
+      MODEL_BACKEND: unknown
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      # Includes the spaCy en_core_web_lg model (~400 MB, pinned in requirements.txt).
+      - run: pip install -r requirements.txt
+      - run: pytest -q -rs
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: dashboard/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: pytest -q -rs

@@ -1,5 +1,7 @@
 # Secure Enterprise AI Evaluation Sandbox
 
+[![CI](https://github.com/subritii/AI-Evaluation-Sandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/subritii/AI-Evaluation-Sandbox/actions/workflows/ci.yml)
+
 A self-hosted sandbox that lets bank and fintech compliance teams test an LLM workflow on their own mock data, fully offline, and walk away with an evidence-backed report on PII protection, tenant isolation, and latency.
 
 > **Status:** 🚧 In active development. See the [Build Roadmap](#build-roadmap) for progress.
@@ -182,6 +184,21 @@ An endpoint on the sandbox network keeps the air-gap; one outside it needs
 `docker-compose.external-endpoint.yml` and is reported as not isolated. See
 [`docs/runbook.md`](docs/runbook.md#using-an-openai-compatible-endpoint).
 
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the backend and
+dashboard test suites on every push and pull request (Python 3.11, Postgres +
+pgvector as a service container). CI has no model server and no GPU:
+
+| Tests | In CI |
+|---|---|
+| `backend/tests/test_ollama_live.py`: `test_embedding_model_returns_vectors_the_schema_accepts`, `test_llm_streams_a_short_answer` (marked `requires_ollama`) | **Skipped**: they call a real Ollama; they run locally whenever Ollama is reachable |
+| Gateway API tests (`test_api.py`) | Run: with an empty database, a fixture ingests the real policy through the real Trust Engine using a fake embedder, then deletes those rows |
+| Everything else (Trust Engine, ingest, metrics, grounding, model clients, dashboard) | Run: model calls are faked |
+
+No test needs a GPU. The evaluation scripts (RAG eval, canary audit, air-gap
+check) need the running stack and aren't part of CI.
+
 ## Build Roadmap
 
 **Core**
@@ -194,11 +211,13 @@ An endpoint on the sandbox network keeps the air-gap; one outside it needs
 - [x] **Task 8: Packaging + air-gap proof.** Dockerfiles, `internal: true` network, one-command start.
 - [x] **Task 9: Model endpoint switch.** Ollama or any OpenAI-compatible endpoint, chosen in `.env`; Trust Engine and audits unchanged.
 - [x] **Task 11: Runbook.** `docs/runbook.md`: hardware, install, config reference, known issues.
+- [x] **Task 12: CI.** GitHub Actions runs the backend and dashboard tests on every push; tests that need Ollama are skipped and listed.
 
 **Stretch**
 
 - [x] **Task 3: Detector evaluation (lean).** Labeled synthetic dataset; precision and recall per entity type.
 - [ ] **Task 5: Multi-tenancy.** `tenant_id` with Postgres row-level security; adversarial cross-tenant tests.
+- [ ] **Task 10: Messy data ingestion.** A realistic messy PDF (tables, repeated headers/footers, multi-column layout); clean extraction; retrieval compared before and after.
 - [ ] Reversible pseudonymization vault
 - [ ] Fault injection mode (simulated 429 / 500)
 

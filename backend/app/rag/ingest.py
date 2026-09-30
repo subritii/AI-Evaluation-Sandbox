@@ -24,7 +24,7 @@ from pypdf import PdfReader
 from app.config import get_settings
 from app.db.connection import get_connection, init_schema
 from app.rag.embeddings import embed_documents
-from app.rag.model_client import build_model_client
+from app.rag.model_client import ChatEmbedClient, build_model_client
 from app.trust_engine import scrub_for_storage
 
 logger = logging.getLogger(__name__)
@@ -150,8 +150,13 @@ def _json_metadata(metadata: dict) -> Jsonb:
     return Jsonb({k: v for k, v in metadata.items() if k not in ("source", "chunk_index")})
 
 
-def ingest(policies_dir: Path) -> None:
-    """Run the full ingest pipeline and log a summary (counts and timings only)."""
+def ingest(policies_dir: Path, client: ChatEmbedClient | None = None, embed_model: str | None = None) -> None:
+    """Run the full ingest pipeline and log a summary (counts and timings only).
+
+    `client` and `embed_model` default to the configured provider; tests pass a
+    fake embedder so the pipeline (load, chunk, Trust Engine, store) runs
+    without a model server.
+    """
     settings = get_settings()
     t0 = time.perf_counter()
 
@@ -166,16 +171,19 @@ def ingest(policies_dir: Path) -> None:
         chunk.page_content = result.text
     t_scrub = time.perf_counter()
 
-    client = build_model_client(settings)
+    embed_model = embed_model or settings.embed_model
+    own_client = client is None
+    client = client or build_model_client(settings)
     try:
-        vectors = embed_documents(client, settings.embed_model, [c.page_content for c in chunks], settings.embed_dim)
+        vectors = embed_documents(client, embed_model, [c.page_content for c in chunks], settings.embed_dim)
     finally:
-        client.close()
+        if own_client:
+            client.close()
     t_embed = time.perf_counter()
 
     with get_connection() as conn:
         init_schema(conn)
-        store_chunks(conn, chunks, vectors, [r.scrubbed_by for r in results], settings.embed_model)
+        store_chunks(conn, chunks, vectors, [r.scrubbed_by for r in results], embed_model)
     t_store = time.perf_counter()
 
     sources = sorted({c.metadata["source"] for c in chunks})

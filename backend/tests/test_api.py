@@ -1,6 +1,8 @@
-"""Gateway tests: real Postgres (from Compose), fake Ollama, real Trust Engine.
+"""Gateway tests: real Postgres, fake model server, real Trust Engine.
 
-Requires ingested policy chunks (docker compose run --rm backend python -m app.rag.ingest).
+Policy chunks come from the real ingest when present, or are seeded by the
+`policy_chunks` fixture (conftest) with a fake embedder, so these tests run in
+CI without Ollama.
 """
 
 import logging
@@ -53,12 +55,8 @@ def fake_ollama(client):
 
 
 @pytest.fixture
-def client():
-    with get_connection() as conn:
-        if not conn.execute("SELECT to_regclass('document_chunks')").fetchone()[0] or not conn.execute(
-            "SELECT count(*) FROM document_chunks"
-        ).fetchone()[0]:
-            pytest.skip("no ingested chunks")
+def client(policy_chunks):
+    # policy_chunks (conftest) uses the real ingest if present, else seeds one without a model server.
     with TestClient(app) as c:  # runs lifespan (schema + Trust Engine warmup)
         yield c
 
