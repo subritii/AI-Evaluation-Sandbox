@@ -92,6 +92,52 @@ def summarize_eval_rag(path: Path, report: dict) -> dict:
             }
             for r in results
         ],
+        # Full per-question records for the trace view. The questions are the
+        # eval's own synthetic, labeled set, not user input.
+        "cases": {r["id"]: _case(r) for r in results},
+    }
+
+
+def _case(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "question": r.get("question", ""),
+        "type": "refuse" if r["should_refuse"] else "answer",
+        "expected_rank": r.get("expected_rank"),
+        "retrieved": r.get("retrieved", []),
+        "answer": r.get("answer"),
+        "answer_pass": r.get("answer_pass"),
+        "refused": r.get("refused"),
+        "missing_keywords": r.get("missing_keywords", []),
+        "citations": r.get("citations", []),
+        "citation_pass": r.get("citation_pass"),
+        "timings_ms": r.get("timings_ms") or {},
+    }
+
+
+def compare_evals(baseline: dict, current: dict) -> dict:
+    """Per-question answer verdicts, baseline vs current (both from summarize_eval_rag)."""
+    ids = list(current["cases"]) + [i for i in baseline["cases"] if i not in current["cases"]]
+    rows = []
+    for qid in ids:
+        before = baseline["cases"].get(qid, {}).get("answer_pass")
+        after = current["cases"].get(qid, {}).get("answer_pass")
+        if qid not in baseline["cases"]:
+            change = "new question"
+        elif qid not in current["cases"]:
+            change = "removed"
+        elif before == after:
+            change = "unchanged"
+        else:
+            change = "fixed" if after else "regressed"
+        case = current["cases"].get(qid) or baseline["cases"][qid]
+        rows.append({"id": qid, "type": case["type"], "baseline": before, "current": after, "change": change})
+    return {
+        "rows": rows,
+        "baseline": {"answers": (baseline["answers_correct"], baseline["answerable"]),
+                     "refusals": (baseline["refusals_correct"], baseline["refusal_cases"])},
+        "current": {"answers": (current["answers_correct"], current["answerable"]),
+                    "refusals": (current["refusals_correct"], current["refusal_cases"])},
     }
 
 
@@ -175,6 +221,14 @@ def summarize_airgap(path: Path, report: dict) -> dict:
         ) and bool(checks.get("control_default_bridge")),
         "proxy_egress": checks.get("proxy_egress"),
         "functional_status": (checks.get("functional_query") or {}).get("status"),
+        "inventory": inventory,
+        "probes": {
+            "in_container": checks.get("in_container", {}),
+            "sandbox_network": checks.get("sandbox_network", {}),
+            "control": checks.get("control_default_bridge", {}),
+            "internal": checks.get("internal_reachability", {}),
+            "ingress": checks.get("ingress", {}),
+        },
     }
 
 
@@ -192,3 +246,32 @@ def backend_of(summary: dict | None) -> str | None:
     models = summary.get("models") or []
     backends = {m["model_backend"] for m in models}
     return backends.pop() if len(backends) == 1 else ("mixed" if backends else None)
+
+
+def backend_label(backend: str | None) -> str:
+    return {
+        "native": "native Ollama (host, Apple GPU)",
+        "docker": "Docker Ollama (container; CPU on macOS)",
+        "remote": "remote model endpoint (another machine)",
+        "unknown": "unknown (recorded before backends were tracked)",
+        "mixed": "mixed backends",
+        None: "not recorded",
+    }.get(backend, backend)
+
+
+def headline_latency(batch: dict | None, can: dict | None) -> tuple[dict, str] | None:
+    """The latency summary with the most samples, and a label naming it.
+
+    Headline percentiles should rest on the largest run available: a 20-question
+    dashboard batch has P95 decided by one request, the 200-request canary batch by ten.
+    """
+    candidates = []
+    if batch and latency_n(batch.get("latency")):
+        backend = backend_label((batch.get("gateway") or {}).get("model_backend"))
+        candidates.append((latency_n(batch["latency"]), batch["latency"], f"dashboard batch {batch['run_id']}, {backend}"))
+    if can and latency_n(can.get("latency")):
+        candidates.append((latency_n(can["latency"]), can["latency"], f"canary audit batch {can['run_id']}, {backend_label(backend_of(can))}"))
+    if not candidates:
+        return None
+    n, latency, label = max(candidates, key=lambda c: c[0])  # ties keep the dashboard batch (listed first)
+    return latency, f"n={n}, {label}"

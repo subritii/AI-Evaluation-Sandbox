@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from html import escape
 
 from batch import STAGES
-from reports import backend_of, latency_n
+from reports import backend_label, backend_of, headline_latency, latency_n
+
+_backend_label = backend_label
 
 STAGE_NOTES = {
     "pii_scan": "Trust Engine (Presidio + custom recognizers) detects and masks the question",
@@ -100,17 +102,6 @@ def _source_line(source: dict, extra: str = "") -> str:
         f'<p class="source">Source: <code>reports/{_e(source["file"])}</code> · started {_e(source["started_at"])}'
         f' · commit <code>{_e(source["git_commit"])}</code>{extra}</p>'
     )
-
-
-def _backend_label(backend: str | None) -> str:
-    return {
-        "native": "native Ollama (host, Apple GPU)",
-        "docker": "Docker Ollama (container; CPU on macOS)",
-        "remote": "remote model endpoint (another machine)",
-        "unknown": "unknown (recorded before backends were tracked)",
-        "mixed": "mixed backends",
-        None: "not recorded",
-    }.get(backend, backend)
 
 
 def _latency_table(stages: dict) -> str:
@@ -406,24 +397,6 @@ def _methodology(batch, rag, det, can, airgap=None) -> str:
     )
 
 
-def headline_latency(batch: dict | None, can: dict | None) -> tuple[dict, str] | None:
-    """The latency summary with the most samples, and a label naming it.
-
-    Headline percentiles should rest on the largest run available: a 20-question
-    dashboard batch has P95 decided by one request, the 200-request canary batch by ten.
-    """
-    candidates = []
-    if batch and latency_n(batch.get("latency")):
-        backend = _backend_label((batch.get("gateway") or {}).get("model_backend"))
-        candidates.append((latency_n(batch["latency"]), batch["latency"], f"dashboard batch {batch['run_id']}, {backend}"))
-    if can and latency_n(can.get("latency")):
-        candidates.append((latency_n(can["latency"]), can["latency"], f"canary audit batch {can['run_id']}, {_backend_label(backend_of(can))}"))
-    if not candidates:
-        return None
-    n, latency, label = max(candidates, key=lambda c: c[0])  # ties keep the dashboard batch (listed first)
-    return latency, f"n={n}, {label}"
-
-
 def _tiles(batch, rag, det, can, airgap=None) -> str:
     tiles = []
     headline = headline_latency(batch, can)
@@ -449,6 +422,27 @@ def _tiles(batch, rag, det, can, airgap=None) -> str:
     ) + "</div>"
 
 
+_STATUS = {"pass": "✅ Pass", "known gap": "⚠️ Known gap", "fail": "❌ Fail", "no data": "⏳ No data"}
+
+
+def _criteria_section(results) -> str:
+    """Acceptance criteria table; `results` are criteria.Result objects (duck-typed to avoid an import cycle)."""
+    if not results:
+        return ""
+    rows = "".join(
+        f"<tr><td>{_STATUS[r.status]}</td><td>{_e(r.criterion.label)}</td><td class='num'>{_e(r.value_text)}</td>"
+        f"<td class='num'>{_e(r.target_text)}</td><td class='muted'>{_e(r.measurement.source if r.measurement else 'no selected report')}"
+        f"{'<br>Known gap: ' + _e(r.note) if r.note else ''}</td></tr>"
+        for r in results
+    )
+    return (
+        "<h2>Acceptance criteria</h2><p class='muted'>Targets from <code>dashboard/acceptance.toml</code>. A miss is a "
+        "known gap only when a documented cause is named; otherwise it is a fail.</p>"
+        "<div class='wide'><table><tr><th>Status</th><th>Criterion</th><th class='num'>Result</th>"
+        f"<th class='num'>Target</th><th>Measured on</th></tr>{rows}</table></div>"
+    )
+
+
 def build_report(
     batch: dict | None,
     rag: dict | None,
@@ -456,6 +450,8 @@ def build_report(
     can: dict | None,
     generated_at: datetime | None = None,
     airgap: dict | None = None,
+    criteria_results: list | None = None,
+    prepared_for: str = "",
 ) -> str:
     """Return the full HTML report. Inputs are a saved batch run and summaries from `reports`."""
     generated = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
@@ -464,9 +460,12 @@ def build_report(
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         f"<title>AI Sandbox Evaluation Report</title><style>{CSS}</style></head><body><main>"
         "<h1>AI Evaluation Sandbox: Evaluation Report</h1>"
-        f"<p class='muted'>Generated {generated}. Every number comes from a saved run named in its section. "
+        + (f"<p><b>Prepared for {_e(prepared_for)}</b> · proof-of-concept evaluation, synthetic data only</p>"
+           if prepared_for else "")
+        + f"<p class='muted'>Generated {generated}. Every number comes from a saved run named in its section. "
         "Evaluation data is synthetic; this report contains no question text.</p>"
         + _tiles(batch, rag, det, can, airgap)
+        + _criteria_section(criteria_results)
         + _batch_section(batch)
         + _rag_section(rag)
         + _detector_section(det)

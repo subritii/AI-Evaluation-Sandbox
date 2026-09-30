@@ -68,6 +68,7 @@ def test_send_one_keeps_only_post_masking_fields():
 
     r = send_one(_client(handler), 0, SECRET, "run-1")
     assert r.status == 200 and r.masked_question == "I'm [PERSON_1]." and r.citations == 1
+    assert r.answer == "..." and r.citation_detail == [{"source": "p.md"}]  # kept in memory for the session trace
     assert SECRET not in json.dumps(r.__dict__)
 
 
@@ -86,7 +87,8 @@ def test_run_record_stores_no_question_text_even_masked():
     # Masking can miss PII (canary audit), so masked text stays out of saved runs.
     results = [
         RequestResult(0, 200, masked_question=f"leaked {SECRET}", masked_entities={"PERSON": 1},
-                      refused=False, citations=2, timings_ms={"total": 1000.0}),
+                      refused=False, citations=2, timings_ms={"total": 1000.0},
+                      answer=f"Echoed {SECRET}", citation_detail=[{"source": "p.md", "section": "KYC"}]),
         RequestResult(1, 502, error="Model server error"),
     ]
     record = build_run_record(
@@ -96,7 +98,7 @@ def test_run_record_stores_no_question_text_even_masked():
         gateway_after={"load_avg": [2.0, 1.0, 1.0]}, metrics=None, wall_time_s=12.34,
     )
     text = json.dumps(record)
-    assert "leaked" not in text and "Maria" not in text
+    assert "leaked" not in text and "Maria" not in text and "Echoed" not in text and "citation_detail" not in text
     assert record["status_counts"] == {"200": 1, "502": 1}
     assert record["masked_entity_totals"] == {"PERSON": 1}
     assert record["environment"]["gateway_load_avg_after"] == [2.0, 1.0, 1.0]

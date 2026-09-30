@@ -39,6 +39,11 @@ DEFAULT_API = os.environ.get("GATEWAY_URL", "http://localhost:8000")
 DEFAULT_REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", Path(__file__).resolve().parents[1] / "reports"))
 
 
+# Held in memory for the on-screen trace, never written to disk: masking can
+# miss PII, so even masked questions and answers stay out of saved runs.
+SESSION_ONLY_FIELDS = ("masked_question", "answer", "citation_detail")
+
+
 class BatchError(ValueError):
     """The upload can't be used. Messages name the row, never its content (it may be PII)."""
 
@@ -55,6 +60,9 @@ class RequestResult:
     citations: int | None = None
     timings_ms: dict[str, float] = field(default_factory=dict)
     error: str | None = None  # error type or HTTP detail, never the request body
+    # Session-only trace detail (never saved): the answer can echo PII that masking missed.
+    answer: str | None = None
+    citation_detail: list[dict] = field(default_factory=list)
 
 
 def parse_batch(filename: str, data: bytes) -> list[str]:
@@ -135,6 +143,8 @@ def send_one(http: httpx.Client, index: int, question: str, run_id: str) -> Requ
         refused=body["refused"],
         citations=len(body["citations"]),
         timings_ms=body["timings_ms"],
+        answer=body.get("answer"),
+        citation_detail=body.get("citations", []),
     )
 
 
@@ -209,7 +219,7 @@ def build_run_record(
         "latency": metrics,
         # No question text at all, not even masked: the canary audit shows the
         # Trust Engine misses some PII, so "masked" text can still hold it.
-        "requests": [{k: v for k, v in asdict(r).items() if k != "masked_question"} for r in results],
+        "requests": [{k: v for k, v in asdict(r).items() if k not in SESSION_ONLY_FIELDS} for r in results],
     }
 
 

@@ -1,0 +1,86 @@
+# Acceptance criteria for the proof of concept: the targets every headline
+# number on the dashboard and in the report is judged against.
+#
+# Status rules (dashboard/criteria.py):
+#   pass       the measured value meets the target
+#   known gap  it misses the target AND `known_gap` names a documented cause
+#   fail       it misses the target and no cause is documented
+#   no data    no selected report measures it
+# A miss is never excused silently: without `known_gap` text it's a fail.
+#
+# Targets: answer accuracy, PII scan P95, canaries in answers/logs/storage,
+# and the air-gap verdict were set by the project owner. Detector recall,
+# unmasked canaries, and end-to-end P95 are placeholders to confirm with the
+# buyer.
+
+prepared_for = "Cobalt Harbor Bank"
+
+# The Task 1 RAG baseline, compared against the current eval on the Accuracy page.
+[baseline]
+report = "eval_rag_20260929-153914.json"
+label = "Task 1 baseline (before the prompt rewrite and code-attached citations)"
+
+[[criteria]]
+id = "answer_accuracy"
+question = "accuracy"
+label = "Correct answers"
+metric = "answer_accuracy"
+comparison = ">="
+target = 0.90
+format = "percent"
+
+[[criteria]]
+id = "detector_recall"
+question = "privacy"
+label = "PII detector recall"
+metric = "detector_recall"
+comparison = ">="
+target = 0.95
+format = "percent"
+known_gap = "Misses are bare digit strings with no context words, some non-English names, and abbreviations like A/C (docs/build-log.md, Task 2). Masking them would also mask order and ticket numbers."
+
+[[criteria]]
+id = "canaries_unmasked"
+question = "privacy"
+label = "Canaries unmasked by the Trust Engine"
+metric = "canaries_unmasked"
+comparison = "<="
+target = 0
+format = "count_of_planted"
+known_gap = "Every unmasked canary is a bare routing or account number with no context words, or a missed name: the same Trust Engine gaps as detector recall. The models received these values; none were found in answers, logs, or storage."
+
+[[criteria]]
+id = "canaries_downstream"
+question = "privacy"
+label = "Canaries found in answers, logs, or storage"
+metric = "canaries_downstream"
+comparison = "<="
+target = 0
+format = "count_of_planted"
+
+[[criteria]]
+id = "airgap"
+question = "isolation"
+label = "Air-gap check"
+metric = "airgap_verdict"
+comparison = "=="
+target = "PASS"
+format = "text"
+
+[[criteria]]
+id = "pii_scan_p95"
+question = "performance"
+label = "PII scan P95"
+metric = "pii_scan_p95_ms"
+comparison = "<="
+target = 200
+format = "ms"
+
+[[criteria]]
+id = "end_to_end_p95"
+question = "performance"
+label = "End-to-end P95"
+metric = "total_p95_ms"
+comparison = "<="
+target = 5000
+format = "ms"
