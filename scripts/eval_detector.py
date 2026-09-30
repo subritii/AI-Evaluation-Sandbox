@@ -117,6 +117,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate PII detection precision and recall per entity type.")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     args = parser.parse_args()
+    # Recorded at the start: the code that runs is the code checked out now.
+    git_commit = _git_commit()
     if not args.dataset.exists():
         sys.exit(f"{args.dataset} not found. Run: .venv/bin/python scripts/generate_dataset.py")
 
@@ -182,7 +184,7 @@ def main() -> None:
     out_path = REPORTS_DIR / f"eval_detector_{started.strftime('%Y%m%d-%H%M%S')}.json"
     report = {
         "started_at": started.isoformat(),
-        "git_commit": _git_commit(),
+        "git_commit": git_commit,
         "scrubber": scrubber_id(),
         "score_threshold": SCORE_THRESHOLD,
         "dataset": {

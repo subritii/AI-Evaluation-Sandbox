@@ -313,9 +313,9 @@ build machine.
 ### Reports cite a `-dirty` commit
 
 - **Cause:** uncommitted (or untracked) files in the repo when the script
-  wrote its report. Scripts check at the end of the run, so editing files
-  *during* a long run also marks it dirty.
-- **Fix:** commit first, don't edit during the run, then rerun.
+  started. Scripts record the commit at the start of a run (the code that
+  runs is the code checked out then), so edits during a run don't change it.
+- **Fix:** commit first, then rerun.
 
 ---
 

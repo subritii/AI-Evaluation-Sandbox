@@ -261,6 +261,8 @@ def main() -> None:
     args = parser.parse_args()
 
     started = datetime.now(timezone.utc)
+    # Recorded at the start: the code that runs is the code checked out now.
+    git_commit = _git_commit()
     run_id = f"canary-{started.strftime('%Y%m%d-%H%M%S')}"
     batch = make_batch(args.requests, args.canary_share, args.seed)
     load_before = os.getloadavg()
@@ -335,7 +337,7 @@ def main() -> None:
         "run_id": run_id,
         "label": "SYNTHETIC canary audit: all planted values are fake (Faker, fixed seed)",
         "started_at": started.isoformat(),
-        "git_commit": _git_commit(),
+        "git_commit": git_commit,
         "config": {"requests": args.requests, "warmup": args.warmup, "canary_share": args.canary_share,
                    "seed": args.seed, "api": args.api},
         "environment": {"host_load_avg_before": load_before, "host_load_avg_after": load_after,

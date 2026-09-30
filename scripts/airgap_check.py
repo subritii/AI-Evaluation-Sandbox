@@ -134,6 +134,8 @@ def main() -> None:
     parser.add_argument("--skip-query", action="store_true", help="Skip the functional /query check")
     args = parser.parse_args()
     started = datetime.now(timezone.utc)
+    # Recorded at the start: the code that runs is the code checked out now.
+    git_commit = _git_commit()
 
     containers = inventory()
     if not containers:
@@ -239,7 +241,7 @@ def main() -> None:
     report = {
         "kind": "airgap_check",
         "started_at": started.isoformat(),
-        "git_commit": _git_commit(),
+        "git_commit": git_commit,
         "verdict": verdict,
         "problems": problems,
         "notes": notes,

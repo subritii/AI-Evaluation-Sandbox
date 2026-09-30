@@ -38,6 +38,8 @@ from app.rag.model_client import ChatEmbedClient, build_model_client, endpoint_u
 from app.rag.pipeline import run_query  # noqa: E402
 
 REPORTS_DIR = REPO_ROOT / "reports"
+# Characters of each retrieved chunk kept in the report for the trace view.
+EXCERPT_CHARS = 400
 
 
 @dataclass(frozen=True)
@@ -201,7 +203,10 @@ def run_case(case: EvalCase, client: ChatEmbedClient, conn, settings, top_k: int
         should_refuse=case.should_refuse,
         retrieved=[
             {"ref": f"{c.source}#{c.chunk_index}", "similarity": round(c.similarity, 4),
-             "heading": c.content.split("\n", 1)[0]}
+             "heading": c.content.split("\n", 1)[0],
+             # Stored chunk text is policy text after the Trust Engine (no PII);
+             # an excerpt lets the dashboard's trace view show what was retrieved.
+             "excerpt": c.content[:EXCERPT_CHARS]}
             for c in q.chunks
         ],
         expected_rank=rank,
@@ -290,6 +295,8 @@ def main() -> None:
     if settings.model_backend == "unknown":
         print("warning: MODEL_BACKEND is not set (docker, native, or remote); the report will say 'unknown'.", file=sys.stderr)
     started_at = datetime.now(timezone.utc)
+    # Recorded at the start: the code that runs is the code checked out now.
+    git_commit = _git_commit()
     load_before = os.getloadavg()
     client = build_model_client(settings)
     results: list[CaseResult] = []
@@ -312,7 +319,7 @@ def main() -> None:
     out_path = REPORTS_DIR / f"eval_rag_{started_at.strftime('%Y%m%d-%H%M%S')}.json"
     report = {
         "started_at": started_at.isoformat(),
-        "git_commit": _git_commit(),
+        "git_commit": git_commit,
         "config": {
             "llm_model": None if args.retrieve_only else settings.llm_model,
             "embed_model": settings.embed_model,
