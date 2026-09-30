@@ -23,6 +23,29 @@ def list_reports(reports_dir: Path, kind: str) -> list[Path]:
     return sorted(reports_dir.glob(f"{KINDS[kind]}*.json"), reverse=True)
 
 
+# Kinds whose default is the run with the most latency samples, not the newest:
+# the canary audit feeds the headline latency tiles, and a 20-request smoke run
+# shouldn't displace a 200-request run just by being newer.
+DEFAULT_BY_SAMPLES = {"canary_audit"}
+
+
+def default_report(kind: str, files: list[Path]) -> Path | None:
+    """The report the dashboard selects first: most latency samples for DEFAULT_BY_SAMPLES kinds
+    (newest wins a tie; `files` is newest first), otherwise the newest."""
+    if not files:
+        return None
+    if kind not in DEFAULT_BY_SAMPLES:
+        return files[0]
+
+    def samples(path: Path) -> int:
+        try:
+            return latency_n(load(path).get("latency"))
+        except (OSError, ValueError):
+            return 0
+
+    return max(files, key=samples)  # max keeps the first (newest) of equal values
+
+
 def load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 

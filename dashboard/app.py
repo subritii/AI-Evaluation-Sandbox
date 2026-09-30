@@ -26,7 +26,8 @@ st.set_page_config(page_title="AI Evaluation Sandbox", layout="wide")
 # --- Sidebar: gateway status and which saved reports to use ---------------------
 
 def pick(kind: str, label: str, prefer: Path | None = None) -> Path | None:
-    """Select box of saved reports of one kind, newest first (or `prefer`, e.g. the run just made)."""
+    """Select box of saved reports of one kind, newest first. Starts on `reports.default_report`
+    (most samples for canary audits, else newest), or on `prefer` right after a dashboard run."""
     files = reports.list_reports(REPORTS_DIR, kind)
     if not files:
         st.sidebar.caption(f"{label}: no reports yet")
@@ -37,7 +38,7 @@ def pick(kind: str, label: str, prefer: Path | None = None) -> Path | None:
     if prefer in files and st.session_state.pop(f"select_{kind}", False):
         st.session_state[key] = prefer
     if st.session_state.get(key) not in files:
-        st.session_state[key] = files[0]
+        st.session_state[key] = reports.default_report(kind, files)
     return st.sidebar.selectbox(label, files, format_func=lambda p: p.name, key=key)
 
 
