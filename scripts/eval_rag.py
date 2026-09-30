@@ -34,7 +34,7 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 from app.config import get_settings  # noqa: E402
 from app.db.connection import get_connection  # noqa: E402
-from app.rag.ollama_client import OllamaClient  # noqa: E402
+from app.rag.model_client import ChatEmbedClient, build_model_client, endpoint_url  # noqa: E402
 from app.rag.pipeline import run_query  # noqa: E402
 
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -190,7 +190,7 @@ def score_citations(case: EvalCase, result: CaseResult, citations, chunks) -> No
         result.citation_precision = round(supported / len(citations), 3) if citations else None
 
 
-def run_case(case: EvalCase, client: OllamaClient, conn, settings, top_k: int, retrieve_only: bool) -> CaseResult:
+def run_case(case: EvalCase, client: ChatEmbedClient, conn, settings, top_k: int, retrieve_only: bool) -> CaseResult:
     """Run one question through the production pipeline and score it."""
     q = run_query(case.question, client=client, conn=conn, settings=settings, top_k=top_k, generate=not retrieve_only)
 
@@ -288,10 +288,10 @@ def main() -> None:
 
     settings = get_settings()
     if settings.model_backend == "unknown":
-        print("warning: MODEL_BACKEND is not set (docker or native); the report will say 'unknown'.", file=sys.stderr)
+        print("warning: MODEL_BACKEND is not set (docker, native, or remote); the report will say 'unknown'.", file=sys.stderr)
     started_at = datetime.now(timezone.utc)
     load_before = os.getloadavg()
-    client = OllamaClient(settings.ollama_base_url)
+    client = build_model_client(settings)
     results: list[CaseResult] = []
     try:
         with get_connection() as conn:
@@ -304,8 +304,8 @@ def main() -> None:
     finally:
         client.close()
 
-    print(f"Model backend: {settings.model_backend}   LLM: {None if args.retrieve_only else settings.llm_model}"
-          f"   embeddings: {settings.embed_model}")
+    llm = None if args.retrieve_only else f"{settings.llm_model} via {settings.llm_provider}"
+    print(f"Model backend: {settings.model_backend}   LLM: {llm}   embeddings: {settings.embed_model} via {settings.embed_provider}")
     print_summary(results, args.retrieve_only)
 
     REPORTS_DIR.mkdir(exist_ok=True)
@@ -319,6 +319,11 @@ def main() -> None:
             # Container vs native Ollama changes latency a lot; record which one ran.
             # The URL alone can't tell (both are localhost:11434 from the host).
             "model_backend": settings.model_backend,
+            "llm_provider": None if args.retrieve_only else settings.llm_provider,
+            "embed_provider": settings.embed_provider,
+            # Credentials stripped; the API key is never written to reports.
+            "llm_endpoint": None if args.retrieve_only else endpoint_url(settings, settings.llm_provider),
+            "embed_endpoint": endpoint_url(settings, settings.embed_provider),
             "ollama_base_url": settings.ollama_base_url,
             "top_k": args.top_k,
             "chunk_size": settings.chunk_size,

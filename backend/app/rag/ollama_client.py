@@ -1,8 +1,8 @@
-"""Minimal HTTP client for the local Ollama server.
+"""Minimal HTTP client for Ollama's native API (the default model provider).
 
-Ollama is the only model endpoint in this project: embeddings and generation
-both stay on the machine. We call its REST API directly with httpx (rather
-than a LangChain wrapper) so every request and timing is explicit.
+We call its REST API directly with httpx (rather than a LangChain wrapper) so
+every request and timing is explicit. `app.rag.model_client` picks this client
+or the OpenAI-compatible one per model, from settings.
 """
 
 import json
@@ -10,8 +10,10 @@ from collections.abc import Iterator
 
 import httpx
 
+from app.rag.errors import ModelServerError
 
-class OllamaError(RuntimeError):
+
+class OllamaError(ModelServerError):
     """Raised when Ollama returns an error (e.g. model not pulled)."""
 
 

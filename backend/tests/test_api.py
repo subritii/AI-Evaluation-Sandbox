@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.db.connection import get_connection
-from app.main import app, get_ollama
+from app.main import app, get_model_client
 
 RAW_NAME, RAW_SSN = "Maria Lopez", "536-22-1847"
 
@@ -47,7 +47,7 @@ def fake_ollama(client):
     if row is None:
         pytest.skip("Payment Card Data chunk not ingested")
     fake = FakeOllama(row[0].to_list())
-    app.dependency_overrides[get_ollama] = lambda: fake
+    app.dependency_overrides[get_model_client] = lambda: fake
     yield fake
     app.dependency_overrides.clear()
 
@@ -115,18 +115,22 @@ def test_latency_samples_record_model_config(client, fake_ollama, run_id):
     """Every sample names the backend and models, so no percentile is quoted without its configuration."""
     assert client.post("/query", json={"question": "How long are KYC records kept?", "run_id": run_id}).status_code == 200
     settings = get_settings()
-    expected = (settings.model_backend, settings.llm_model, settings.embed_model)
+    expected = (settings.model_backend, settings.llm_model, settings.embed_model,
+                settings.llm_provider, settings.embed_provider)
 
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT DISTINCT model_backend, llm_model, embed_model FROM latency_samples WHERE run_id = %s", (run_id,)
+            "SELECT DISTINCT model_backend, llm_model, embed_model, llm_provider, embed_provider"
+            " FROM latency_samples WHERE run_id = %s",
+            (run_id,),
         ).fetchall()
     assert rows == [expected]
     # Compose sets MODEL_BACKEND for the backend service; it should never fall back to "unknown" there.
     assert settings.model_backend in ("docker", "native")
 
     models = client.get(f"/metrics/{run_id}").json()["models"]
-    assert models == [dict(zip(("model_backend", "llm_model", "embed_model"), expected), requests=1)]
+    keys = ("model_backend", "llm_model", "embed_model", "llm_provider", "embed_provider")
+    assert models == [dict(zip(keys, expected), requests=1)]
 
 
 def test_info_reports_config_without_secrets(client):
@@ -134,7 +138,11 @@ def test_info_reports_config_without_secrets(client):
     settings = get_settings()
     assert info["model_backend"] == settings.model_backend and info["llm_model"] == settings.llm_model
     assert info["scrubber"].startswith("presidio-") and len(info["load_avg"]) == 3
+    assert info["llm_provider"] == settings.llm_provider and info["embed_provider"] == settings.embed_provider
+    assert info["llm_endpoint"] and info["embed_endpoint"]
     assert settings.postgres_password not in str(info)
+    if settings.openai_api_key and settings.openai_api_key.get_secret_value():
+        assert settings.openai_api_key.get_secret_value() not in str(info)
 
 
 def test_metrics_unknown_run_is_404(client):

@@ -24,9 +24,11 @@ MIN_SAMPLES_FOR_P99 = 100
 class ModelConfig:
     """The model runtime and models behind a sample; timings mean little without it."""
 
-    model_backend: str  # "docker", "native", or "unknown"
+    model_backend: str  # "docker", "native", "remote", or "unknown"
     llm_model: str
     embed_model: str
+    llm_provider: str = "ollama"  # "ollama" or "openai_compatible"
+    embed_provider: str = "ollama"
 
 
 def record_samples(
@@ -34,14 +36,15 @@ def record_samples(
 ) -> None:
     """Insert one row per measured stage. Stages that didn't run (e.g. no generation) are skipped."""
     rows = [
-        (run_id, request_id, stage, timings_ms[stage], model.model_backend, model.llm_model, model.embed_model)
+        (run_id, request_id, stage, timings_ms[stage], model.model_backend, model.llm_model, model.embed_model,
+         model.llm_provider, model.embed_provider)
         for stage in STAGES
         if stage in timings_ms
     ]
     with conn.transaction(), conn.cursor() as cur:
         cur.executemany(
-            "INSERT INTO latency_samples (run_id, request_id, stage, ms, model_backend, llm_model, embed_model)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO latency_samples (run_id, request_id, stage, ms, model_backend, llm_model, embed_model,"
+            " llm_provider, embed_provider) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             rows,
         )
 
@@ -74,11 +77,12 @@ def run_metrics(conn: psycopg.Connection, run_id: str) -> dict | None:
     ).fetchone()[0]
     # Normally one configuration per run; a run that spans a switch lists each.
     models = [
-        {"model_backend": b, "llm_model": llm, "embed_model": emb, "requests": n}
-        for b, llm, emb, n in conn.execute(
+        {"model_backend": b, "llm_model": llm, "embed_model": emb, "llm_provider": lp, "embed_provider": ep,
+         "requests": n}
+        for b, llm, emb, lp, ep, n in conn.execute(
             """
-            SELECT model_backend, llm_model, embed_model, count(DISTINCT request_id)
-            FROM latency_samples WHERE run_id = %s GROUP BY 1, 2, 3 ORDER BY 4 DESC
+            SELECT model_backend, llm_model, embed_model, llm_provider, embed_provider, count(DISTINCT request_id)
+            FROM latency_samples WHERE run_id = %s GROUP BY 1, 2, 3, 4, 5 ORDER BY 6 DESC
             """,
             (run_id,),
         ).fetchall()

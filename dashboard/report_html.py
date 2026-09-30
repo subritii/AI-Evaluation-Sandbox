@@ -106,6 +106,7 @@ def _backend_label(backend: str | None) -> str:
     return {
         "native": "native Ollama (host, Apple GPU)",
         "docker": "Docker Ollama (container; CPU on macOS)",
+        "remote": "remote model endpoint (another machine)",
         "unknown": "unknown (recorded before backends were tracked)",
         "mixed": "mixed backends",
         None: "not recorded",
@@ -288,6 +289,14 @@ def _canary_section(can: dict | None) -> str:
     )
 
 
+def _model_line(gw: dict, kind: str) -> str | None:
+    """'llama3.2:3b via ollama at http://ollama:11434'; gateways before Task 9 report the model only."""
+    model = gw.get(f"{kind}_model")
+    if not model or not gw.get(f"{kind}_provider"):
+        return model
+    return f"{model} via {gw[f'{kind}_provider']} at {gw.get(f'{kind}_endpoint')}"
+
+
 def _isolation_statement(backend: str | None, airgap: dict | None = None) -> str:
     """What is and isn't proven about network access, citing the air-gap check when one is selected."""
     text = ("No external services are called: embeddings and generation go to a local Ollama, and there are no "
@@ -314,6 +323,9 @@ def _isolation_statement(backend: str | None, airgap: dict | None = None) -> str
                  "<code>scripts/airgap_check.py</code>; no air-gap check report was selected.")
     if backend == "native":
         text += " This batch used native Ollama on the host, which is outside that isolation."
+    elif backend == "remote":
+        text += (" This batch used a model endpoint on another machine, outside that isolation: masked questions "
+                 "were sent to it, and masking misses some PII (see the canary audit).")
     elif backend == "docker":
         text += " This batch used the all-Docker configuration."
     return text
@@ -326,8 +338,8 @@ def _methodology(batch, rag, det, can, airgap=None) -> str:
         f"<tr><td>{label}</td><td>{_e(value)}</td></tr>"
         for label, value in (
             ("Model backend", _backend_label(gw.get("model_backend")) if batch else None),
-            ("LLM", gw.get("llm_model")),
-            ("Embedding model", gw.get("embed_model")),
+            ("LLM", _model_line(gw, "llm")),
+            ("Embedding model", _model_line(gw, "embed")),
             ("Temperature / max tokens", f"{gw.get('temperature')} / {gw.get('max_tokens')}" if gw else None),
             ("Trust Engine", gw.get("scrubber")),
         )

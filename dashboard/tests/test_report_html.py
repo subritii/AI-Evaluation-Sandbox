@@ -180,3 +180,16 @@ def test_failed_or_native_airgap_check_is_not_presented_as_isolation():
         html = build(airgap=check)
         assert "Isolation is not established" in html
         assert "network isolation is enforced by Docker" not in html
+
+
+def test_config_names_provider_and_endpoint_when_recorded():
+    gw = BATCH["gateway"] | {"llm_provider": "openai_compatible", "llm_endpoint": "http://vllm:8000/v1",
+                             "embed_provider": "ollama", "embed_endpoint": "http://ollama:11434"}
+    html = build(batch=BATCH | {"gateway": gw})
+    assert "llama3.2:3b via openai_compatible at http://vllm:8000/v1" in html
+    assert "nomic-embed-text via ollama at http://ollama:11434" in html
+
+
+def test_remote_endpoint_batch_warns_that_masked_text_left_the_machine():
+    html = build(batch=BATCH | {"gateway": BATCH["gateway"] | {"model_backend": "remote"}})
+    assert "model endpoint on another machine" in html and "masking misses some PII" in html

@@ -50,3 +50,10 @@ ALTER TABLE latency_samples ADD COLUMN IF NOT EXISTS embed_model   TEXT NOT NULL
 ALTER TABLE latency_samples ALTER COLUMN model_backend DROP DEFAULT;
 ALTER TABLE latency_samples ALTER COLUMN llm_model     DROP DEFAULT;
 ALTER TABLE latency_samples ALTER COLUMN embed_model   DROP DEFAULT;
+-- Which API served each model (Task 9). Rows written before this column
+-- existed came from Ollama, the only provider the code could call then, so
+-- 'ollama' is a fact, not a guess. The default is dropped afterwards.
+ALTER TABLE latency_samples ADD COLUMN IF NOT EXISTS llm_provider   TEXT NOT NULL DEFAULT 'ollama';
+ALTER TABLE latency_samples ADD COLUMN IF NOT EXISTS embed_provider TEXT NOT NULL DEFAULT 'ollama';
+ALTER TABLE latency_samples ALTER COLUMN llm_provider   DROP DEFAULT;
+ALTER TABLE latency_samples ALTER COLUMN embed_provider DROP DEFAULT;

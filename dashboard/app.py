@@ -46,7 +46,10 @@ st.sidebar.header("Gateway")
 info = get_json(API, "/info", timeout_s=5)
 if info:
     st.sidebar.success(f"Connected · backend **{info['model_backend']}**")
-    st.sidebar.caption(f"{info['llm_model']} · {info['embed_model']}  \n{info['scrubber']}")
+    st.sidebar.caption(
+        f"LLM {info['llm_model']} via {info.get('llm_provider', 'ollama')}  \n"
+        f"Embeddings {info['embed_model']} via {info.get('embed_provider', 'ollama')}  \n{info['scrubber']}"
+    )
 else:
     st.sidebar.error(f"Gateway not reachable at {API}")
 

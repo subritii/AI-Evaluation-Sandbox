@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,14 +22,25 @@ class Settings(BaseSettings):
     postgres_password: str
     postgres_db: str = "sandbox"
 
-    # Ollama (the only model endpoint; no cloud APIs).
+    # Which API serves each model (Task 9). "ollama" = Ollama's native API at
+    # OLLAMA_BASE_URL. "openai_compatible" = any server speaking the OpenAI
+    # /chat/completions and /embeddings API at OPENAI_BASE_URL (vLLM,
+    # llama.cpp, LM Studio, a private Azure OpenAI deployment, Ollama's /v1).
+    # Set separately so embeddings can stay local while generation moves.
+    llm_provider: Literal["ollama", "openai_compatible"] = "ollama"
+    embed_provider: Literal["ollama", "openai_compatible"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
-    # Which Ollama runtime serves the models: "docker" (the container; CPU-only
-    # on macOS) or "native" (Ollama on the host; Apple GPU). Latency differs by
-    # an order of magnitude, so every measurement records it. The URL can't tell
-    # them apart (both answer on localhost:11434 from the host), so each compose
-    # file sets it and host-run scripts must set it; unset stays "unknown".
-    model_backend: Literal["docker", "native", "unknown"] = "unknown"
+    # e.g. http://vllm:8000/v1 (inside the sandbox network keeps the air-gap).
+    openai_base_url: str = ""
+    # SecretStr: masked in reprs and never returned by /info or written to reports.
+    openai_api_key: SecretStr | None = None
+    # Where the model server runs: "docker" (a container on this machine; CPU
+    # only on macOS), "native" (on the host; Apple GPU), or "remote" (another
+    # machine). Latency differs by an order of magnitude, so every measurement
+    # records it. URLs can't tell reliably (both local options answer on
+    # localhost:11434 from the host), so the compose files set it; unset stays
+    # "unknown".
+    model_backend: Literal["docker", "native", "remote", "unknown"] = "unknown"
     embed_model: str = "nomic-embed-text"
     llm_model: str = "llama3.2:3b"
     # 0 = greedy decoding: the same question and context give the same answer,
@@ -43,6 +55,12 @@ class Settings(BaseSettings):
     policies_dir: Path = Path("data/policies")
     chunk_size: int = 1000
     chunk_overlap: int = 150
+
+    @model_validator(mode="after")
+    def _openai_endpoint_configured(self) -> "Settings":
+        if "openai_compatible" in (self.llm_provider, self.embed_provider) and not self.openai_base_url:
+            raise ValueError("OPENAI_BASE_URL is required when LLM_PROVIDER or EMBED_PROVIDER is openai_compatible")
+        return self
 
     @property
     def database_url(self) -> str:

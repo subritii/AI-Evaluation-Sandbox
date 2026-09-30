@@ -13,7 +13,7 @@ import sys
 
 from app.config import get_settings
 from app.db.connection import get_connection
-from app.rag.ollama_client import OllamaClient
+from app.rag.model_client import build_model_client
 from app.rag.pipeline import run_query
 
 
@@ -25,7 +25,7 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
-    client = OllamaClient(settings.ollama_base_url)
+    client = build_model_client(settings)
     try:
         with get_connection() as conn:
             result = run_query(

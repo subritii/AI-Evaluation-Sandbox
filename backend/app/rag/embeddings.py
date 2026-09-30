@@ -6,7 +6,7 @@ degrades retrieval without raising any error, so they're applied here in one
 place rather than at each call site.
 """
 
-from app.rag.ollama_client import OllamaClient
+from app.rag.model_client import ChatEmbedClient
 
 DOCUMENT_PREFIX = "search_document: "
 QUERY_PREFIX = "search_query: "
@@ -16,7 +16,7 @@ BATCH_SIZE = 32
 
 
 def embed_documents(
-    client: OllamaClient, model: str, texts: list[str], expected_dim: int
+    client: ChatEmbedClient, model: str, texts: list[str], expected_dim: int
 ) -> list[list[float]]:
     """Embed passages for storage, in batches."""
     vectors: list[list[float]] = []
@@ -27,7 +27,7 @@ def embed_documents(
     return vectors
 
 
-def embed_query(client: OllamaClient, model: str, question: str, expected_dim: int) -> list[float]:
+def embed_query(client: ChatEmbedClient, model: str, question: str, expected_dim: int) -> list[float]:
     """Embed a user question for similarity search."""
     [vector] = client.embed(model, [QUERY_PREFIX + question])
     _check_dimensions([vector], expected_dim)

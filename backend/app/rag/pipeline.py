@@ -19,7 +19,7 @@ import psycopg
 from app.config import Settings
 from app.rag.embeddings import embed_query
 from app.rag.grounding import Citation, is_refusal, select_citations
-from app.rag.ollama_client import OllamaClient
+from app.rag.model_client import ChatEmbedClient
 from app.rag.retrieval import RetrievedChunk, retrieve
 from app.trust_engine import scrub
 
@@ -62,7 +62,7 @@ def build_messages(question: str, chunks: list[RetrievedChunk]) -> list[dict]:
 def run_query(
     question: str,
     *,
-    client: OllamaClient,
+    client: ChatEmbedClient,
     conn: psycopg.Connection,
     settings: Settings,
     top_k: int = 4,

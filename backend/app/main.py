@@ -24,7 +24,8 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.db.connection import get_connection, init_schema
 from app.metrics.latency import ModelConfig, record_samples, run_metrics
-from app.rag.ollama_client import OllamaClient, OllamaError
+from app.rag.errors import ModelServerError
+from app.rag.model_client import ModelClient, build_model_client, endpoint_url
 from app.rag.pipeline import run_query
 from app.trust_engine import scrub
 from app.trust_engine.engine import scrubber_id
@@ -63,8 +64,8 @@ def get_db() -> Iterator[psycopg.Connection]:
         yield conn
 
 
-def get_ollama() -> Iterator[OllamaClient]:
-    client = OllamaClient(get_settings().ollama_base_url)
+def get_model_client() -> Iterator[ModelClient]:
+    client = build_model_client(get_settings())
     try:
         yield client
     finally:
@@ -118,6 +119,11 @@ def info() -> dict:
     settings = get_settings()
     return {
         "model_backend": settings.model_backend,
+        "llm_provider": settings.llm_provider,
+        "embed_provider": settings.embed_provider,
+        # Credentials stripped; the API key is never returned.
+        "llm_endpoint": endpoint_url(settings, settings.llm_provider),
+        "embed_endpoint": endpoint_url(settings, settings.embed_provider),
         "llm_model": settings.llm_model,
         "embed_model": settings.embed_model,
         "temperature": settings.llm_temperature,
@@ -132,7 +138,7 @@ def info() -> dict:
 def query(
     body: QueryRequest,
     conn: psycopg.Connection = Depends(get_db),
-    client: OllamaClient = Depends(get_ollama),
+    client: ModelClient = Depends(get_model_client),
 ) -> QueryResponse:
     """Scrub the question, retrieve policy chunks, generate an answer, attach citations.
 
@@ -142,15 +148,17 @@ def query(
     settings = get_settings()
     try:
         result = run_query(body.question, client=client, conn=conn, settings=settings, top_k=body.top_k)
-    except OllamaError as exc:
-        # Ollama's error text is about the model/server, not the request; still, log the type only.
+    except ModelServerError as exc:
+        # The server's error text is about the model/server, not the request; still, log the type only.
         logger.error("request %s failed: %s", request_id, type(exc).__name__)
         raise HTTPException(status_code=502, detail="Model server error") from exc
 
     if not result.chunks or result.answer is None:
         raise HTTPException(status_code=503, detail="No documents ingested")
 
-    model = ModelConfig(settings.model_backend, settings.llm_model, settings.embed_model)
+    model = ModelConfig(
+        settings.model_backend, settings.llm_model, settings.embed_model, settings.llm_provider, settings.embed_provider
+    )
     record_samples(conn, body.run_id, request_id, result.timings_ms, model)
     logger.info(
         "request %s run=%s masked=%s refused=%s citations=%d total_ms=%.0f",

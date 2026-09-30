@@ -1,0 +1,40 @@
+# OPTION: an OpenAI-compatible model endpoint OUTSIDE the sandbox network
+# (on the host, e.g. LM Studio or llama.cpp's server, or on another machine,
+# e.g. a private vLLM or Azure OpenAI deployment).
+#
+# NOT ISOLATED. The sandbox network has no route out, so backend, ingest, and
+# tools also join `edge` here to reach the endpoint, which gives them a route
+# to the internet too; scripts/airgap_check.py reports FAIL for this setup.
+# Masked questions (and, for embeddings, masked policy chunks) are sent to the
+# endpoint. The Trust Engine masks before anything is sent, but it misses some
+# PII (see the canary audit), so only use an endpoint you control.
+#
+# Recorded as model_backend=remote unless MODEL_BACKEND says otherwise (use
+# native for a server on this Mac). Every report and latency sample also
+# records the provider and endpoint URL (never the API key).
+#
+# Usage, with the provider settings in .env (see .env.example):
+#   docker compose -f docker-compose.yml -f docker-compose.external-endpoint.yml up -d
+
+x-external-env: &external-env
+  MODEL_BACKEND: ${MODEL_BACKEND:-remote}
+
+x-external-host: &external-host
+  # Lets a server on this machine be reached as host.docker.internal.
+  - "host.docker.internal:host-gateway"
+
+services:
+  ingest:
+    environment: *external-env
+    extra_hosts: *external-host
+    networks: [sandbox, edge]
+
+  backend:
+    environment: *external-env
+    extra_hosts: *external-host
+    networks: [sandbox, edge]
+
+  tools:
+    environment: *external-env
+    extra_hosts: *external-host
+    networks: [sandbox, edge]

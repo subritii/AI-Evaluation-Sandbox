@@ -24,7 +24,7 @@ from pypdf import PdfReader
 from app.config import get_settings
 from app.db.connection import get_connection, init_schema
 from app.rag.embeddings import embed_documents
-from app.rag.ollama_client import OllamaClient
+from app.rag.model_client import build_model_client
 from app.trust_engine import scrub_for_storage
 
 logger = logging.getLogger(__name__)
@@ -166,7 +166,7 @@ def ingest(policies_dir: Path) -> None:
         chunk.page_content = result.text
     t_scrub = time.perf_counter()
 
-    client = OllamaClient(settings.ollama_base_url)
+    client = build_model_client(settings)
     try:
         vectors = embed_documents(client, settings.embed_model, [c.page_content for c in chunks], settings.embed_dim)
     finally:

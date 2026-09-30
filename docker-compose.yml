@@ -24,7 +24,15 @@ x-backend-env: &backend-env
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (cp .env.example .env)}
   POSTGRES_DB: ${POSTGRES_DB:-sandbox}
   OLLAMA_BASE_URL: http://ollama:11434
-  # Recorded with every latency sample and report; the native override changes it.
+  # Model providers (Task 9): ollama or openai_compatible, per model. An
+  # OpenAI-compatible server must be reachable on the sandbox network (e.g. a
+  # container added to it) to keep the air-gap; one outside it needs
+  # docker-compose.external-endpoint.yml, which is not isolated.
+  LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+  EMBED_PROVIDER: ${EMBED_PROVIDER:-ollama}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  # Recorded with every latency sample and report; the overrides change it.
   MODEL_BACKEND: docker
   EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
   LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
