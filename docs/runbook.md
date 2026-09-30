@@ -77,6 +77,8 @@ the one-shot `ingest` to embed the policy documents.
 | Air-gap check | `.venv/bin/python scripts/airgap_check.py` (rerun after any compose change) |
 | Batch without the UI | `docker compose run --rm dashboard python batch.py /data/sample_batches/policy_questions.jsonl` |
 | Free disk | `df -h .` and `docker system df` |
+| CI status | README badge, or `gh run list --limit 5` |
+| Reproduce CI locally (empty DB, no Ollama) | create a throwaway DB, then `docker compose run --rm -e CI=true -e POSTGRES_DB=<it> -e OLLAMA_BASE_URL=http://nowhere.invalid:11434 backend pytest -rs` |
 
 All reports land in `reports/` (gitignored) and record their git commit.
 Commit before a run you intend to cite, or the report says `-dirty`.
@@ -285,7 +287,8 @@ build machine.
   `BACKEND_HOST_PORT`, and `DASHBOARD_HOST_PORT` (so code defaults applied,
   and host-run scripts recorded `model_backend=unknown` unless it was typed
   on the command line). It still had `POSTGRES_HOST_PORT` and
-  `OLLAMA_HOST_PORT`, which nothing reads any more.
+  `OLLAMA_HOST_PORT`, which nothing reads any more. On 2026-09-30 it was
+  rebuilt from `.env.example` with only `POSTGRES_PASSWORD` carried over.
 - **Fix:**
   1. Compare keys with the example (prints names only, no values):
      `comm -3 <(grep -oE '^[A-Z_]+' .env.example | sort -u) <(grep -oE '^[A-Z_]+' .env | sort -u)`

@@ -686,3 +686,82 @@ host load was 12-13 in the second run and 17-29 in the first, on CPU.
   re-measured.
 - Embeddings must stay 768-dimensional without a schema change.
 - The `ollama` container starts even when neither model uses it.
+
+---
+
+## Task 12: CI
+
+### What
+
+`.github/workflows/ci.yml` runs the backend and dashboard suites on every push
+and pull request: Python 3.11, Postgres + pgvector as a service container, no
+model server, no GPU. The README shows a status badge and lists the tests CI
+skips. Final run `36789350677` (commit `5d113a0`): backend **82 passed, 2
+skipped, 1 xfailed**; dashboard **33 passed**; badge "passing".
+
+| Tests | In CI |
+|---|---|
+| `test_ollama_live.py` (2, `requires_ollama`) | Skipped: they call a real Ollama. They run locally when it's reachable |
+| Gateway API tests (5) | Run, on chunks seeded without Ollama |
+| All others | Run; model calls are faked |
+
+### How
+
+- **`requires_ollama` marker** (`backend/tests/conftest.py`): skipped when
+  `OLLAMA_BASE_URL/api/version` doesn't answer within 2 s. Two new
+  integration tests use it: the embedding model returns vectors the schema
+  accepts (768 dimensions), and the LLM streams an answer. These catch what the
+  fakes can't: a missing model or a dimension mismatch on the real server.
+- **API tests no longer depend on Ollama-created data.** They used to skip
+  without ingested chunks, and only Ollama could create chunks, so CI would
+  have skipped all 5 silently. A session fixture now checks the database:
+  with a real ingest present it uses it untouched; with an empty database it
+  runs the real ingest (load, chunk, Trust Engine, store) with a
+  deterministic hash-based fake embedder, labeled `test-fake-embedder`, and
+  deletes those rows at the end. `ingest()` accepts an injected client for
+  this.
+- **Verified locally before pushing:** backend tests in the backend container
+  against a fresh empty database with an unreachable Ollama. Result: 82
+  passed, 2 skipped (only the live tests), 0 seeded rows left behind.
+
+### What the first CI run caught
+
+The first run (`36788546863`) failed one backend test, which asserted that
+`MODEL_BACKEND` is always `docker` or `native`. That's true under Compose, but
+CI runs without Compose and honestly records `unknown`. The assertion now
+applies outside CI only.
+
+The same failure showed a real problem: pytest printed the `Settings` object
+in the failure output, **including `postgres_password` in plain text**. It was
+only the throwaway CI password, but a failing test locally would have printed
+the real one to the terminal (rule 1 in spirit: secrets and sensitive data
+don't belong in logs). `postgres_password` is now a `SecretStr`, like the API
+key, and a test checks that neither secret appears in `repr` or a dump while
+the DB URL still works.
+
+### Why
+
+- **Run tests natively on the runner, not via Docker Compose.** Compose in CI
+  would need the 7 GB Ollama image just to start, and nothing in the suites
+  needs it. A pgvector service container is all the backend needs.
+- **Skip by reachability, not by `CI=true`.** The live tests run wherever a
+  model server answers (the local stack) and skip wherever none does. That's
+  the actual requirement, and a laptop without Ollama running skips them too.
+- **Seed instead of skip.** A skipped test looks green in CI and proves
+  nothing. The API tests cover masking before the model, citations, latency
+  recording, and the 422 handler, which is too much to lose silently.
+- **Hard-coded CI database password.** It protects a database that exists only
+  for the length of the job, with no data. Service containers start before
+  any step runs, so a generated password isn't possible without more
+  machinery. The value is labeled "not a secret" in the workflow.
+
+## Housekeeping: `.env` rebuilt (2026-09-30)
+
+The working `.env` was rebuilt from `.env.example`, keeping only
+`POSTGRES_PASSWORD`. Added: `BACKEND_HOST_PORT`, `DASHBOARD_HOST_PORT`,
+`LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `LLM_PROVIDER`, `EMBED_PROVIDER`,
+`OPENAI_BASE_URL`, `OPENAI_API_KEY` (empty). Removed: `POSTGRES_HOST_PORT`,
+`OLLAMA_HOST_PORT`, `POSTGRES_HOST`, `POSTGRES_PORT`, `OLLAMA_BASE_URL`
+(unused, or overridden inside Compose). No shared key had a different value.
+The running stack's resolved config was unchanged (no container was
+recreated), and `/info` reported the same settings.

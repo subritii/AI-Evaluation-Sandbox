@@ -42,6 +42,7 @@ This is a portfolio project for Solutions Engineer roles. The owner is building 
 - Config comes from environment variables via `app/config.py`. Inside Compose, reach services by name (`db`, `ollama`), not `localhost`.
 - Network: data-handling services stay on the `internal: true` `sandbox` network with no published ports; only `proxy` publishes (loopback). Don't add ports or non-internal networks to other services; rerun `airgap_check.py` after compose changes. The native-Ollama override is not isolated.
 - Tests in `backend/tests/`, named `test_<module>.py`. Add tests with every Trust Engine change, including cases that should NOT be flagged.
+- CI (`.github/workflows/ci.yml`) runs both suites on every push with no model server. Mark any test that calls a real model server `@pytest.mark.requires_ollama` (skipped when none is reachable) and list it in the README's CI table; don't make tests depend on Ollama-created data (use the `policy_chunks` fixture).
 - Latency: use `time.perf_counter()`; record stages `pii_scan`, `retrieval`, `time_to_first_token`, `generation`, `total`, in milliseconds.
 
 ## Commands
@@ -60,4 +61,4 @@ docker compose logs -f backend          # backend logs
 
 ## Current focus
 
-Update this line as work progresses: **Tasks 1-4, 6-9, and 11 done (+ lean Task 3). All-Docker stack isolated and proven by `airgap_check.py`; models switchable between Ollama and any OpenAI-compatible endpoint (Task 9, tested end to end via Ollama's /v1 with the air-gap intact); runbook in `docs/runbook.md`. Next: Task 5 (multi-tenancy with Postgres RLS). Task 10 is not defined yet. Optional: a 200-request all-Docker canary run (~2 h on CPU).**
+Update this line as work progresses: **Tasks 1-4, 6-9, 11, and 12 done (+ lean Task 3). All-Docker stack isolated and proven by `airgap_check.py`; models switchable between Ollama and any OpenAI-compatible endpoint; runbook in `docs/runbook.md`; CI (GitHub Actions) green on every push. Next: Task 5 (multi-tenancy with Postgres RLS), then stretch Task 10 (messy PDF ingestion, retrieval before/after). Optional: a 200-request all-Docker canary run (~2 h on CPU).**
