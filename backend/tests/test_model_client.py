@@ -47,9 +47,12 @@ def test_openai_provider_requires_a_base_url():
         settings(embed_provider="openai_compatible")
 
 
-def test_api_key_is_never_shown():
-    s = settings(llm_provider="openai_compatible", openai_base_url="http://llm.test/v1", openai_api_key=KEY)
-    assert KEY not in repr(s) and KEY not in str(s.model_dump())
+def test_secrets_are_never_shown():
+    s = Settings(postgres_password="db-secret-value", _env_file=None, llm_provider="openai_compatible",
+                 openai_base_url="http://llm.test/v1", openai_api_key=KEY)
+    for secret in (KEY, "db-secret-value"):
+        assert secret not in repr(s) and secret not in str(s.model_dump())
+    assert "password=db-secret-value" in s.database_url  # still usable where it's needed
 
 
 def test_endpoint_url_strips_credentials():

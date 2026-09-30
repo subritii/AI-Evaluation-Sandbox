@@ -6,6 +6,7 @@ CI without Ollama.
 """
 
 import logging
+import os
 import uuid
 
 import pytest
@@ -123,8 +124,9 @@ def test_latency_samples_record_model_config(client, fake_ollama, run_id):
             (run_id,),
         ).fetchall()
     assert rows == [expected]
-    # Compose sets MODEL_BACKEND for the backend service; it should never fall back to "unknown" there.
-    assert settings.model_backend in ("docker", "native")
+    # The compose files always set MODEL_BACKEND; only CI (no Compose, no model server) runs as "unknown".
+    if not os.environ.get("CI"):
+        assert settings.model_backend in ("docker", "native", "remote")
 
     models = client.get(f"/metrics/{run_id}").json()["models"]
     keys = ("model_backend", "llm_model", "embed_model", "llm_provider", "embed_provider")
@@ -138,7 +140,7 @@ def test_info_reports_config_without_secrets(client):
     assert info["scrubber"].startswith("presidio-") and len(info["load_avg"]) == 3
     assert info["llm_provider"] == settings.llm_provider and info["embed_provider"] == settings.embed_provider
     assert info["llm_endpoint"] and info["embed_endpoint"]
-    assert settings.postgres_password not in str(info)
+    assert settings.postgres_password.get_secret_value() not in str(info)
     if settings.openai_api_key and settings.openai_api_key.get_secret_value():
         assert settings.openai_api_key.get_secret_value() not in str(info)
 

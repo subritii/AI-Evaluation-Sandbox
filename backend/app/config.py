@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_user: str = "sandbox"
-    postgres_password: str
+    # SecretStr so it never appears in a repr, e.g. in a failing test's output.
+    postgres_password: SecretStr
     postgres_db: str = "sandbox"
 
     # Which API serves each model (Task 9). "ollama" = Ollama's native API at
@@ -68,7 +69,7 @@ class Settings(BaseSettings):
         return (
             f"host={self.postgres_host} port={self.postgres_port} "
             f"dbname={self.postgres_db} user={self.postgres_user} "
-            f"password={self.postgres_password}"
+            f"password={self.postgres_password.get_secret_value()}"
         )
 
 
