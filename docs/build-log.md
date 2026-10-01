@@ -879,11 +879,16 @@ native Ollama, n=200).
    before the models. Name the known gap (bare numbers with no context) and
    the trade-off (masking every number would mask order IDs too). Hover
    *recall* for the definition.
-4. **Isolation (1 min).** PASS, with the control probe as proof the test can
-   detect egress. Volunteer the proxy's route out before anyone asks.
-5. **Performance (1 min).** PII scan P95 92 ms against a 200 ms target, n=200.
-   Hover *P95*. Show "All latency runs" so no run is hidden, including the
-   slower all-Docker CPU runs.
+4. **Isolation (1 min).** Read the card's headline aloud: "No container that
+   handles data can reach the internet; only the ingress proxy can." The
+   control probe proves the test can detect egress. Explain the proxy
+   exception before anyone asks.
+5. **Performance (1 min).** Two rows. Native GPU (development): PII scan
+   P95 92 ms against 200 ms, end-to-end 3.3 s, n=200, both pass. Isolated
+   all-Docker CPU on this 8 GB laptop: 364 ms and 26.7 s, both known gaps.
+   Say the cause plainly (CPU-only inference; production would run a GPU
+   inside the isolated network) and that the isolated sample is n=20. Hover
+   *P95*. Show "All latency runs" so no run is hidden.
 6. **Run a test + Report (1 min).** Upload `data/sample_batches/
    policy_questions.csv`, watch the live chart, select a request to trace it
    (session only). Download the report and point at its criteria table and
@@ -892,3 +897,44 @@ native Ollama, n=200).
 Have ready: `acceptance.toml` (targets are editable, and a miss needs a
 written cause to be amber), `scripts/airgap_check.py` (you can rerun it
 live), and the build log's list of known gaps.
+
+### Follow-up: targets confirmed, performance per configuration
+
+- **All targets confirmed** by the owner, including the three that were
+  placeholders (detector recall ≥ 95%, unmasked canaries ≤ 0, end-to-end
+  P95 ≤ 5 s).
+- **Performance is reported per configuration**, defined in
+  `acceptance.toml`: *Native GPU (development)* and *Isolated all-Docker CPU
+  (8 GB laptop)*. Each row uses the largest saved latency run of that
+  configuration (newest on a tie). A run belongs to a configuration only if
+  its backend matches and both models used Ollama, so the all-Docker run
+  through the OpenAI-compatible API (Task 9) isn't counted as the isolated
+  configuration.
+
+  | Configuration | PII scan P95 (≤ 200 ms) | End-to-end P95 (≤ 5 s) | Run |
+  |---|---|---|---|
+  | Native GPU (development) | 92 ms ✅ | 3,341 ms ✅ | `canary-20260929-203656`, n=200 |
+  | Isolated all-Docker CPU (8 GB laptop) | 364 ms ⚠️ | 26,749 ms ⚠️ | `canary-20260929-213533`, n=20 |
+
+  The isolated rows are known gaps with the owner's documented cause:
+  "CPU-only inference on an 8 GB laptop; a production deployment would run a
+  GPU inside the isolated network." For end-to-end latency the mechanism is
+  direct. The PII scan never uses a GPU; it's slower in that run because it
+  shares the laptop's CPU with model inference (host load average 17-29
+  during the run, vs 2-4 for the native run), so the same cause applies
+  indirectly. The isolated sample is small (n=20, so its P95 rests on one
+  request); a larger all-Docker run would take about 2 hours on this
+  machine.
+- **The Performance card** names its configuration ("PII scan P95 · Native
+  GPU (development), n=200, …") and states both configurations in its
+  sentence. Its verdict is now ⚠️ known gap, the worst of its four rows.
+- **The Isolation card's headline is a sentence**, "No container that handles
+  data can reach the internet; only the ingress proxy can", instead of
+  "PASS". FAIL and INCONCLUSIVE have their own sentences.
+- **The HTML report uses the same cards** (`verdict_text.py` is shared, so the
+  wording can't drift) in a Verdicts section, and its criteria table has one
+  row per configuration.
+- **Bug caught on screen:** the per-configuration P95 chart used bars on a
+  log scale. Bars start at zero, which a log scale can't show, so Vega-Lite
+  dropped them all and the chart rendered empty, while the tests (which
+  check data, not pixels) passed. It's now a dot plot.

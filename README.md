@@ -155,7 +155,7 @@ http://localhost:8501, organized by the questions a buyer asks:
 | **Accuracy** | Does it answer correctly? Per-question results; select a row for a trace (question, retrieved chunks with similarity, answer, citations, per-stage timings); before/after against the Task 1 baseline |
 | **Privacy** | Is PII masked before the models, and does any reach answers, logs, or storage? Detector precision/recall and the canary audit |
 | **Isolation** | Is it cut off from the internet? The air-gap check: containers, probes, control |
-| **Performance** | How long does the PII scan add, and a full answer? P50/P95/P99 per stage, all latency runs |
+| **Performance** | How long does the PII scan add, and a full answer? One row per configuration (native GPU for development, isolated all-Docker CPU on an 8 GB laptop), P50/P95/P99 per stage, all latency runs |
 | **Run a test** | Upload a CSV or JSONL batch and watch per-stage latency live; per-request traces stay in the browser session |
 | **Report** | Download one self-contained HTML report with the criteria and methodology |
 
@@ -176,8 +176,8 @@ and all data is synthetic.
 | | |
 |---|---|
 | **Overview:** verdict per buyer question against its target ![Overview](docs/images/dashboard-overview.jpg) | **Accuracy:** trace for one question ![Accuracy trace](docs/images/dashboard-accuracy-trace.jpg) |
-| **Privacy:** canaries unmasked vs found downstream ![Privacy](docs/images/dashboard-privacy.jpg) | **Performance:** headline run with P50/P95 per stage ![Performance](docs/images/dashboard-performance.jpg) |
-| **Isolation:** air-gap check ![Isolation](docs/images/dashboard-isolation.jpg) | |
+| **Overview:** isolation and performance verdicts, each naming its configuration ![Overview verdicts](docs/images/dashboard-overview-verdicts.jpg) | **Privacy:** canaries unmasked vs found downstream ![Privacy](docs/images/dashboard-privacy.jpg) |
+| **Performance:** one row per configuration, P95 per stage ![Performance](docs/images/dashboard-performance.jpg) | **Isolation:** air-gap check ![Isolation](docs/images/dashboard-isolation.jpg) |
 
 ### Dev option: native Ollama on macOS
 
@@ -253,8 +253,8 @@ check) need the running stack and aren't part of CI.
 | Canaries unmasked by the Trust Engine | 43/207 (native, 200 requests; 50 before the card-format fix); 6/21 (all-Docker, 20 requests). All are known gaps: bare digits without context, some names. | `python scripts/canary_audit.py` |
 | Canaries found in answers, logs, or storage | 0/207 (native, including the native Ollama log); 0/21 (all-Docker, including the Ollama container log) | same run |
 | Cross-tenant retrievals | — | `python scripts/isolation_test.py` |
-| Security layer latency (PII scan P95) | 92 ms (native, n=200); 364 ms (all-Docker, n=20, host load 17-29) | `python scripts/canary_audit.py` |
-| End-to-end latency (P95) | 3.3 s (native, n=200); 26.7 s (all-Docker, n=20) | `python scripts/canary_audit.py` |
+| Security layer latency (PII scan P95, target ≤ 200 ms) | Native GPU (development): 92 ms, pass (n=200). Isolated all-Docker CPU (8 GB laptop): 364 ms, known gap (n=20, host load 17-29) | `python scripts/canary_audit.py` |
+| End-to-end latency (P95, target ≤ 5 s) | Native GPU (development): 3.3 s, pass (n=200). Isolated all-Docker CPU (8 GB laptop): 26.7 s, known gap (n=20). Cause: CPU-only inference on an 8 GB laptop; a production deployment would run a GPU inside the isolated network. | `python scripts/canary_audit.py` |
 | RAG answers / citations | 9/9 correct, 2/2 refusals, evidence cited 9/9 on native, all-Docker, and all-Docker through the OpenAI-compatible API (11 questions, llama3.2:3b) | `docker compose run --rm tools python scripts/eval_rag.py` |
 
 ## Design Decisions

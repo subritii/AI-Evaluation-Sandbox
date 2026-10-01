@@ -8,12 +8,29 @@
 #   no data    no selected report measures it
 # A miss is never excused silently: without `known_gap` text it's a fail.
 #
-# Targets: answer accuracy, PII scan P95, canaries in answers/logs/storage,
-# and the air-gap verdict were set by the project owner. Detector recall,
-# unmasked canaries, and end-to-end P95 are placeholders to confirm with the
-# buyer.
+# All targets are confirmed by the project owner.
+#
+# Performance is judged per configuration (below): each row is measured on
+# the largest saved latency run (canary audit or dashboard batch) of that
+# configuration, newest first on a tie.
 
 prepared_for = "Cobalt Harbor Bank"
+
+# Deployment configurations latency is reported for. A run belongs to one when
+# its model backend matches and both models use these providers (runs from
+# before providers were recorded used Ollama, the only provider then).
+[[configurations]]
+id = "native"
+label = "Native GPU (development)"
+model_backend = "native"
+providers = ["ollama"]
+headline = true  # the Overview's Performance headline comes from this one
+
+[[configurations]]
+id = "isolated"
+label = "Isolated all-Docker CPU (8 GB laptop)"
+model_backend = "docker"
+providers = ["ollama"]
 
 # The Task 1 RAG baseline, compared against the current eval on the Accuracy page.
 [baseline]
@@ -68,19 +85,43 @@ target = "PASS"
 format = "text"
 
 [[criteria]]
-id = "pii_scan_p95"
+id = "pii_scan_p95_native"
 question = "performance"
 label = "PII scan P95"
+configuration = "native"
 metric = "pii_scan_p95_ms"
 comparison = "<="
 target = 200
 format = "ms"
 
 [[criteria]]
-id = "end_to_end_p95"
+id = "end_to_end_p95_native"
 question = "performance"
 label = "End-to-end P95"
+configuration = "native"
 metric = "total_p95_ms"
 comparison = "<="
 target = 5000
 format = "ms"
+
+[[criteria]]
+id = "pii_scan_p95_isolated"
+question = "performance"
+label = "PII scan P95"
+configuration = "isolated"
+metric = "pii_scan_p95_ms"
+comparison = "<="
+target = 200
+format = "ms"
+known_gap = "CPU-only inference on an 8 GB laptop; a production deployment would run a GPU inside the isolated network."
+
+[[criteria]]
+id = "end_to_end_p95_isolated"
+question = "performance"
+label = "End-to-end P95"
+configuration = "isolated"
+metric = "total_p95_ms"
+comparison = "<="
+target = 5000
+format = "ms"
+known_gap = "CPU-only inference on an 8 GB laptop; a production deployment would run a GPU inside the isolated network."

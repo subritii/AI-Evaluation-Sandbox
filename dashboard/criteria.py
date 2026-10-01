@@ -1,15 +1,21 @@
 """Acceptance criteria: judge every headline number against a target from acceptance.toml.
 
 Pure logic (no Streamlit), so the dashboard, the HTML report, and the tests
-all use the same rules. Measurements come only from the selected reports;
-a criterion with no report behind it is "no data", never a guess.
+all use the same rules. Measurements come only from saved reports; a
+criterion with no report behind it is "no data", never a guess.
+
+Most criteria are measured on the reports selected in the dashboard. A
+criterion scoped to a `configuration` (e.g. native GPU vs isolated all-Docker
+CPU) is measured on the largest saved latency run of that configuration, so
+each configuration gets its own row instead of whichever run happens to be
+selected.
 """
 
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from reports import backend_label, headline_latency
+from reports import backend_label, backend_of, headline_latency
 
 CONFIG_PATH = Path(__file__).with_name("acceptance.toml")
 
@@ -28,6 +34,16 @@ QUESTIONS = {
 }
 COMPARISONS = {">=": lambda v, t: v >= t, "<=": lambda v, t: v <= t, "==": lambda v, t: v == t}
 FORMATS = {"percent", "count_of_planted", "text", "ms"}
+LATENCY_METRICS = {"pii_scan_p95_ms": "pii_scan", "total_p95_ms": "total"}
+
+
+@dataclass(frozen=True)
+class Configuration:
+    id: str
+    label: str
+    model_backend: str
+    providers: tuple[str, ...] = ("ollama",)
+    headline: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,6 +56,7 @@ class Criterion:
     target: float | int | str
     format: str
     known_gap: str = ""
+    configuration: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,13 +65,18 @@ class Config:
     criteria: list[Criterion]
     baseline_report: str | None = None
     baseline_label: str = ""
+    configurations: dict[str, Configuration] = field(default_factory=dict)
+
+    def headline_configuration(self) -> Configuration | None:
+        return next((c for c in self.configurations.values() if c.headline), None)
 
 
 @dataclass(frozen=True)
 class Measurement:
     value: float | int | str
-    source: str  # which run: e.g. "canary audit canary-…, n=200, native Ollama (host, Apple GPU)"
+    source: str  # which run, in words
     denominator: int | None = None  # e.g. canaries planted
+    run: dict | None = None  # the latency run, for configuration-scoped criteria
 
 
 @dataclass(frozen=True)
@@ -62,6 +84,12 @@ class Result:
     criterion: Criterion
     measurement: Measurement | None
     status: str
+    configuration: Configuration | None = None
+
+    @property
+    def label(self) -> str:
+        """Criterion label, with its configuration when it has one."""
+        return f"{self.criterion.label} · {self.configuration.label}" if self.configuration else self.criterion.label
 
     @property
     def value_text(self) -> str:
@@ -79,8 +107,16 @@ class Result:
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config:
-    """Read and validate acceptance.toml; a malformed criterion is an error, not a silent skip."""
+    """Read and validate acceptance.toml; a malformed entry is an error, not a silent skip."""
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    configurations = {}
+    for item in raw.get("configurations", []):
+        conf = Configuration(**(item | {"providers": tuple(item.get("providers", ("ollama",)))}))
+        if conf.id in configurations:
+            raise ValueError(f"configuration ids must be unique: {conf.id}")
+        configurations[conf.id] = conf
+    if sum(c.headline for c in configurations.values()) > 1:
+        raise ValueError("at most one configuration can be the headline")
     criteria = []
     for item in raw.get("criteria", []):
         c = Criterion(**item)
@@ -92,11 +128,17 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
             raise ValueError(f"criterion {c.id}: unknown format {c.format!r}")
         if c.metric not in METRICS:
             raise ValueError(f"criterion {c.id}: unknown metric {c.metric!r}")
+        if c.configuration is not None:
+            if c.configuration not in configurations:
+                raise ValueError(f"criterion {c.id}: unknown configuration {c.configuration!r}")
+            if c.metric not in LATENCY_METRICS:
+                raise ValueError(f"criterion {c.id}: only latency metrics can be scoped to a configuration")
         criteria.append(c)
     if len({c.id for c in criteria}) != len(criteria):
         raise ValueError("criterion ids must be unique")
     baseline = raw.get("baseline", {})
-    return Config(raw.get("prepared_for", ""), criteria, baseline.get("report"), baseline.get("label", ""))
+    return Config(raw.get("prepared_for", ""), criteria, baseline.get("report"), baseline.get("label", ""),
+                  configurations)
 
 
 def format_value(fmt: str, m: Measurement) -> str:
@@ -110,7 +152,7 @@ def format_value(fmt: str, m: Measurement) -> str:
     return str(v)
 
 
-# --- Measurements from the selected reports -------------------------------------
+# --- Measurements -----------------------------------------------------------------
 
 def _answer_accuracy(s: dict) -> Measurement | None:
     rag = s.get("rag")
@@ -135,8 +177,8 @@ def _canary(group: str):
         if not can:
             return None
         return Measurement(can[group]["total"],
-                           f"canary audit {can['run_id']}, {can['requests']} requests, "
-                           f"{backend_label(_backend_of_models(can))}", can["planted"]["total"])
+                           f"canary audit {can['run_id']}, {can['requests']} requests, {backend_label(backend_of(can))}",
+                           can["planted"]["total"])
     return measure
 
 
@@ -157,11 +199,6 @@ def _latency(stage: str):
     return measure
 
 
-def _backend_of_models(can: dict) -> str | None:
-    backends = {m["model_backend"] for m in can.get("models") or []}
-    return backends.pop() if len(backends) == 1 else ("mixed" if backends else None)
-
-
 METRICS = {
     "answer_accuracy": _answer_accuracy,
     "detector_recall": _detector_recall,
@@ -173,22 +210,49 @@ METRICS = {
 }
 
 
-def measure_all(summaries: dict) -> dict[str, Measurement | None]:
-    """summaries: {"batch", "rag", "det", "can", "airgap"} (any may be None)."""
-    return {name: fn(summaries) for name, fn in METRICS.items()}
+def run_matches(run: dict, conf: Configuration) -> bool:
+    """A run belongs to a configuration when its only backend and all its providers match."""
+    return run["model_backends"] == [conf.model_backend] and set(run["providers"]) <= set(conf.providers)
+
+
+def configuration_run(runs: list[dict], conf: Configuration) -> dict | None:
+    """The largest saved latency run of a configuration; `runs` is newest first, so a tie keeps the newest."""
+    matching = [r for r in runs if run_matches(r, conf)]
+    return max(matching, key=lambda r: r["n"]) if matching else None
+
+
+def _run_label(run: dict) -> str:
+    kind = "canary audit" if run["kind"] == "canary_audit" else "dashboard batch"
+    return f"n={run['n']}, {kind} {run['run_id']}"
+
+
+def measure(c: Criterion, summaries: dict, config: Config) -> Measurement | None:
+    if c.configuration is None:
+        return METRICS[c.metric](summaries)
+    run = configuration_run(summaries.get("latency_runs") or [], config.configurations[c.configuration])
+    stage = (run or {}).get("latency", {}).get("stages", {}).get(LATENCY_METRICS[c.metric]) if run else None
+    if not stage:
+        return None
+    return Measurement(stage["p95"], _run_label(run), run=run)
+
+
+def measure_all(config: Config, summaries: dict) -> dict[str, Measurement | None]:
+    """Measurement per criterion id. summaries: batch, rag, det, can, airgap, latency_runs (any may be None)."""
+    return {c.id: measure(c, summaries, config) for c in config.criteria}
 
 
 def evaluate(config: Config, measurements: dict[str, Measurement | None]) -> list[Result]:
+    """Status per criterion; `measurements` is keyed by criterion id."""
     results = []
     for c in config.criteria:
-        m = measurements.get(c.metric)
+        m = measurements.get(c.id)
         if m is None:
             status = NO_DATA
         elif COMPARISONS[c.comparison](m.value, c.target):
             status = PASS
         else:
             status = KNOWN_GAP if c.known_gap.strip() else FAIL
-        results.append(Result(c, m, status))
+        results.append(Result(c, m, status, config.configurations.get(c.configuration) if c.configuration else None))
     return results
 
 

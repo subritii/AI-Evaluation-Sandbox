@@ -194,3 +194,17 @@ def test_config_names_provider_and_endpoint_when_recorded():
 def test_remote_endpoint_batch_warns_that_masked_text_left_the_machine():
     html = build(batch=BATCH | {"gateway": BATCH["gateway"] | {"model_backend": "remote"}})
     assert "model endpoint on another machine" in html and "masking misses some PII" in html
+
+
+def test_report_uses_the_overview_verdict_cards_when_given(tmp_path):
+    from context import default_paths, load_context
+    from tests import fixtures
+    reports_dir = fixtures.write_all(tmp_path / "reports")
+    ctx = load_context(reports_dir, "http://127.0.0.1:9", None, default_paths(reports_dir))
+    html = build_report(ctx.batch, ctx.rag, ctx.det, ctx.can, airgap=ctx.airgap, criteria_results=ctx.results,
+                        prepared_for=ctx.config.prepared_for, cards=ctx.cards)
+    assert "<h2>Verdicts</h2>" in html
+    assert "No container that handles data can reach the internet; only the ingress proxy can" in html
+    assert "PII scan P95 · Native GPU (development), n=200" in html
+    assert "End-to-end P95 · Isolated all-Docker CPU (8 GB laptop)" in html  # criteria table row per configuration
+    assert "CPU-only inference on an 8 GB laptop; a production deployment would run a GPU inside the isolated network." in html

@@ -24,7 +24,7 @@ def criteria_table(results: list[criteria.Result]) -> None:
     if not results:
         return
     df = pd.DataFrame([
-        {"Status": status_text(r.status), "Criterion": r.criterion.label, "Result": r.value_text,
+        {"Status": status_text(r.status), "Criterion": r.label, "Result": r.value_text,
          "Target": r.target_text, "Measured on": r.measurement.source if r.measurement else "no selected report",
          "Known gap": r.note}
         for r in results

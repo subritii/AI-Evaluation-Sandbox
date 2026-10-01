@@ -77,10 +77,28 @@ def test_privacy_splits_unmasked_from_downstream(monkeypatch, reports_dir):
     assert "3/207 Unmasked by the Trust Engine" in text
 
 
-def test_performance_headline_is_the_largest_run(monkeypatch, reports_dir):
-    text = text_of(render(monkeypatch, reports_dir, "performance"))
-    assert "n=200, canary audit batch canary-20260929-203656" in text
-    assert "92 ms PII scan P95" in text
+def test_performance_shows_each_configuration_as_its_own_row(monkeypatch, reports_dir):
+    at = render(monkeypatch, reports_dir, "performance")
+    by_config = next(d.value for d in at.dataframe if "configuration" in d.value.columns and "status" in d.value.columns)
+    rows = by_config.set_index("configuration")
+    native, isolated = rows.loc["Native GPU (development)"], rows.loc["Isolated all-Docker CPU (8 GB laptop)"]
+    assert (native["PII scan P95"], native["n"], native["status"]) == (92.0, 200, "✅ Pass")
+    assert (isolated["end-to-end P95"], isolated["n"], isolated["status"]) == (26749.0, 20, "⚠️ Known gap")
+    criteria_rows = next(d.value for d in at.dataframe if "Criterion" in d.value.columns)
+    assert "End-to-end P95 · Isolated all-Docker CPU (8 GB laptop)" in criteria_rows["Criterion"].tolist()
+    assert "CPU-only inference on an 8 GB laptop" in text_of(at)
+
+
+def test_overview_performance_card_names_its_configuration(monkeypatch, reports_dir):
+    text = text_of(render(monkeypatch, reports_dir, "overview"))
+    assert "PII scan P95 · Native GPU (development), n=200, canary audit canary-20260929-203656" in text
+    assert "Isolated all-Docker CPU (8 GB laptop) (n=20)" in text and "a known gap: CPU-only inference" in text
+
+
+def test_overview_isolation_headline_is_a_sentence_with_the_proxy_caveat(monkeypatch, reports_dir):
+    text = text_of(render(monkeypatch, reports_dir, "overview"))
+    assert "No container that handles data can reach the internet; only the ingress proxy can" in text
+    assert "## PASS" not in text
 
 
 def test_run_test_page_shows_no_question_text_from_saved_runs(monkeypatch, reports_dir):
@@ -97,5 +115,5 @@ def test_full_app_renders_with_navigation_and_settings(monkeypatch, reports_dir)
     assert not at.exception, [e.value for e in at.exception]
     assert at.title[0].value == "Overview"
     picked = {s.label: s.value.name for s in at.selectbox}
-    assert picked["Canary audit"] == "canary_audit_20260929-203656.json"
+    assert picked["Canary audit"] == "canary_audit_20260929-203656.json"  # most samples, not newest
     assert picked["RAG eval"] == "eval_rag_20260929-195959.json"  # newest; the baseline is older

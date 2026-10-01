@@ -10,6 +10,7 @@ from pathlib import Path
 
 import criteria
 import reports
+import verdict_text
 
 KINDS = ("dashboard_batch", "eval_rag", "eval_detector", "canary_audit", "airgap_check")
 KIND_LABELS = {
@@ -34,13 +35,16 @@ class Context:
     airgap: dict | None
     config: criteria.Config
     baseline: dict | None  # summarized baseline eval, if its report exists
+    latency_runs: list[dict] = field(default_factory=list)  # every saved latency run, newest first
+    cards: list = field(default_factory=list)  # verdict_text.Card per question
     results: list[criteria.Result] = field(default_factory=list)
     verdicts: list[criteria.Verdict] = field(default_factory=list)
     # st.Page objects by key, for links between pages (empty in tests).
     pages: dict = field(default_factory=dict)
 
     def summaries(self) -> dict:
-        return {"batch": self.batch, "rag": self.rag, "det": self.det, "can": self.can, "airgap": self.airgap}
+        return {"batch": self.batch, "rag": self.rag, "det": self.det, "can": self.can, "airgap": self.airgap,
+                "latency_runs": self.latency_runs}
 
     def results_for(self, question: str) -> list[criteria.Result]:
         return [r for r in self.results if r.criterion.question == question]
@@ -69,10 +73,11 @@ def load_context(reports_dir: Path, api: str, info: dict | None, paths: dict[str
         det=summarize("eval_detector", reports.summarize_detector),
         can=summarize("canary_audit", reports.summarize_canary),
         airgap=summarize("airgap_check", reports.summarize_airgap),
-        config=config, baseline=baseline,
+        config=config, baseline=baseline, latency_runs=reports.latency_runs(reports_dir),
     )
-    ctx.results = criteria.evaluate(config, criteria.measure_all(ctx.summaries()))
+    ctx.results = criteria.evaluate(config, criteria.measure_all(config, ctx.summaries()))
     ctx.verdicts = criteria.verdicts(ctx.results)
+    ctx.cards = verdict_text.cards(ctx.results, ctx.summaries(), config)
     return ctx
 
 
@@ -101,6 +106,10 @@ def runs_shown(ctx: Context) -> list[str]:
     if ctx.airgap:
         lines.append(f"Air-gap check: {ctx.airgap['verdict']}, {reports.backend_label(ctx.airgap['model_backend'])}, "
                      f"{run_date(ctx.airgap['source']['started_at'])}")
+    for conf in ctx.config.configurations.values():
+        run = criteria.configuration_run(ctx.latency_runs, conf)
+        if run:
+            lines.append(f"Latency, {conf.label}: {run['run_id']}, {run['n']} requests, {run_date(run['started_at'])}")
     if ctx.batch:
         gw = ctx.batch.get("gateway") or {}
         lines.append(f"Batch run: {ctx.batch['input']['questions']} questions, "

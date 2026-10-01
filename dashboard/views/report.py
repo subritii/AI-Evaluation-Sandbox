@@ -10,7 +10,7 @@ from report_html import build_report
 
 def html_for(ctx: Context) -> str:
     return build_report(ctx.batch, ctx.rag, ctx.det, ctx.can, datetime.now(timezone.utc), airgap=ctx.airgap,
-                        criteria_results=ctx.results, prepared_for=ctx.config.prepared_for)
+                        criteria_results=ctx.results, prepared_for=ctx.config.prepared_for, cards=ctx.cards)
 
 
 def render(ctx: Context) -> None:

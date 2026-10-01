@@ -64,6 +64,9 @@ td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; white-spac
 .tile { border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--panel); }
 .tile .v { font-size:22px; font-weight:650; font-variant-numeric:tabular-nums; }
 .tile .l { font-size:13px; color:var(--muted); }
+.verdicts { grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
+.verdict .st { margin:4px 0; font-weight:600; } .verdict .vs { margin:6px 0; font-size:17px; }
+.verdict p { margin:8px 0 0; font-size:14px; }
 .warn { background:var(--warn-bg); border:1px solid var(--warn-line); border-radius:6px; padding:8px 12px; margin:8px 0; }
 .bar { position:relative; height:14px; min-width:160px; background:var(--panel); border-radius:3px; }
 .bar span { position:absolute; left:0; top:0; bottom:0; border-radius:3px; }
@@ -426,12 +429,26 @@ def _tiles(batch, rag, det, can, airgap=None) -> str:
 _STATUS = {"pass": "✅ Pass", "known gap": "⚠️ Known gap", "fail": "❌ Fail", "no data": "⏳ No data"}
 
 
+def _verdict_section(cards) -> str:
+    """The Overview's verdict cards (verdict_text.Card, duck-typed), in the same words."""
+    out = []
+    for c in cards:
+        head = f"<div class='v'>{_e(c.headline)}</div>" if len(c.headline) <= 12 else f"<p class='vs'><b>{_e(c.headline)}</b></p>"
+        out.append(
+            f"<div class='tile verdict'><div class='l'>{_e(c.title)}</div><div class='st'>{_STATUS[c.status]}</div>{head}"
+            + (f"<div class='l'>{_e(c.subhead)}</div>" if c.subhead else "")
+            + "".join(f"<div class='l'>{_e(line)}</div>" for line in c.lines)
+            + f"<p>{_e(c.sentence)}</p></div>"
+        )
+    return "<h2>Verdicts</h2><div class='tiles verdicts'>" + "".join(out) + "</div>"
+
+
 def _criteria_section(results) -> str:
     """Acceptance criteria table; `results` are criteria.Result objects (duck-typed to avoid an import cycle)."""
     if not results:
         return ""
     rows = "".join(
-        f"<tr><td>{_STATUS[r.status]}</td><td>{_e(r.criterion.label)}</td><td class='num'>{_e(r.value_text)}</td>"
+        f"<tr><td>{_STATUS[r.status]}</td><td>{_e(getattr(r, 'label', r.criterion.label))}</td><td class='num'>{_e(r.value_text)}</td>"
         f"<td class='num'>{_e(r.target_text)}</td><td class='muted'>{_e(r.measurement.source if r.measurement else 'no selected report')}"
         f"{'<br>Known gap: ' + _e(r.note) if r.note else ''}</td></tr>"
         for r in results
@@ -453,6 +470,7 @@ def build_report(
     airgap: dict | None = None,
     criteria_results: list | None = None,
     prepared_for: str = "",
+    cards: list | None = None,
 ) -> str:
     """Return the full HTML report. Inputs are a saved batch run and summaries from `reports`."""
     generated = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
@@ -465,7 +483,7 @@ def build_report(
            if prepared_for else "")
         + f"<p class='muted'>Generated {generated}. Every number comes from a saved run named in its section. "
         "Evaluation data is synthetic; this report contains no question text.</p>"
-        + _tiles(batch, rag, det, can, airgap)
+        + (_verdict_section(cards) if cards else _tiles(batch, rag, det, can, airgap))
         + _criteria_section(criteria_results)
         + _batch_section(batch)
         + _rag_section(rag)

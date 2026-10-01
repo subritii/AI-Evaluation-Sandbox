@@ -278,3 +278,35 @@ def headline_latency(batch: dict | None, can: dict | None) -> tuple[dict, str] |
         return None
     n, latency, label = max(candidates, key=lambda c: c[0])  # ties keep the dashboard batch (listed first)
     return latency, f"n={n}, {label}"
+
+
+def latency_runs(reports_dir: Path) -> list[dict]:
+    """Every saved run with latency (canary audits and dashboard batches), newest first.
+
+    Each item: file, kind, run_id, started_at, n, model_backend(s), providers,
+    load at start, and the gateway's per-stage summary.
+    """
+    runs = []
+    for kind in ("canary_audit", "dashboard_batch"):
+        for path in list_reports(reports_dir, kind):
+            try:
+                raw = load(path)
+            except (OSError, ValueError):
+                continue
+            latency = raw.get("latency") or {}
+            if not latency_n(latency):
+                continue
+            models = latency.get("models") or raw.get("model_config") or []
+            gateway = raw.get("gateway") or {}
+            backends = sorted({m.get("model_backend") for m in models} or {gateway.get("model_backend")}, key=str)
+            # Runs from before Task 9 recorded no provider: Ollama was the only one.
+            providers = sorted({m.get(k, "ollama") for m in models for k in ("llm_provider", "embed_provider")}
+                               or {gateway.get(k, "ollama") for k in ("llm_provider", "embed_provider")})
+            env = raw.get("environment") or {}
+            load_avg = env.get("host_load_avg_before") or env.get("gateway_load_avg_before")
+            runs.append({
+                "file": path.name, "kind": kind, "run_id": raw.get("run_id"), "started_at": raw.get("started_at"),
+                "n": latency_n(latency), "model_backends": backends, "providers": providers,
+                "load_at_start": load_avg[0] if load_avg else None, "latency": latency,
+            })
+    return sorted(runs, key=lambda r: r["file"].split("_")[-1], reverse=True)

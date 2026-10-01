@@ -77,6 +77,27 @@ def write_all(reports_dir: Path) -> Path:
         "searched_locations": {"responses": ["masked_question", "answer"], "logs": ["backend"], "database_columns": ["t.c"]},
         "not_searched": [], "findings": findings,
     })
+    # The isolated all-Docker CPU configuration: smaller and much slower.
+    docker_models = [{"model_backend": "docker", "llm_model": "llama3.2:3b", "embed_model": "nomic-embed-text",
+                      "requests": 20}]  # no provider fields: recorded before Task 9, so Ollama
+    put("canary_audit_20260929-213533.json", {
+        "run_id": "canary-20260929-213533", "started_at": "2026-09-29T21:35:33+00:00", "git_commit": "2ef114f",
+        "config": {"requests": 20}, "environment": {"host_load_avg_before": [28.6, 1, 1], "host_load_avg_after": [17.4, 1, 1]},
+        "model_config": docker_models,
+        "latency": {"run_id": "canary-20260929-213533", "models": docker_models, "stages": _stages(20, 364.0, 26749.0), "notes": []},
+        "planted": {"total": 21, "by_entity": {"PERSON": 5}}, "found": {"total": 0, "by_entity": {}, "by_location": {}},
+        "searched_locations": {}, "not_searched": [], "findings": [],
+    })
+    # All-Docker but through the OpenAI-compatible API: not the isolated configuration as defined (providers differ).
+    openai_models = [dict(docker_models[0], llm_provider="openai_compatible", embed_provider="openai_compatible")]
+    put("canary_audit_20260930-161023.json", {
+        "run_id": "canary-20260930-161023", "started_at": "2026-09-30T16:10:23+00:00", "git_commit": "0682c2f",
+        "config": {"requests": 20}, "environment": {"host_load_avg_before": [12.0, 1, 1]},
+        "model_config": openai_models,
+        "latency": {"run_id": "canary-20260930-161023", "models": openai_models, "stages": _stages(20, 224.0, 16329.0), "notes": []},
+        "planted": {"total": 21, "by_entity": {"PERSON": 5}}, "found": {"total": 0, "by_entity": {}, "by_location": {}},
+        "searched_locations": {}, "not_searched": [], "findings": [],
+    })
     put("airgap_check_20260929-214335.json", {
         "kind": "airgap_check", "started_at": "2026-09-29T21:43:35+00:00", "git_commit": "23579ac", "verdict": "PASS",
         "problems": [], "notes": ["The ingress proxy can reach the internet."], "model_backend": "docker",
