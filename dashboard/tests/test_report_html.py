@@ -86,6 +86,7 @@ def test_methodology_records_backend_models_and_load():
     html = build()
     assert "llama3.2:3b" in html and "presidio-x+rules-v2" in html
     assert "1.5 → 2.5" in html and "3.0 → 4.0" in html and "2.2 → 4.1" in html
+    assert "RAG eval (where not recorded)" in html  # older report: no claim it was the host
     assert "outside that VM" in html  # native backend: VM load excludes the models
 
 

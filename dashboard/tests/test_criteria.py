@@ -125,3 +125,13 @@ def test_no_reports_means_no_data_everywhere(tmp_path: Path):
     empty.mkdir()
     ctx = load_context(empty, "http://127.0.0.1:9", None, default_paths(empty))
     assert {v.status for v in ctx.verdicts} == {NO_DATA}
+
+
+def test_eval_load_location_is_reported_not_assumed():
+    import reports
+    from tests.fixtures import eval_rag
+    old = reports.summarize_eval_rag(Path("eval_rag_1.json"), eval_rag())
+    new_report = eval_rag()
+    new_report["environment"]["load_measured_in"] = "docker_vm"
+    new = reports.summarize_eval_rag(Path("eval_rag_2.json"), new_report)
+    assert (old["load_where"], new["load_where"]) == ("where not recorded", "Docker VM")

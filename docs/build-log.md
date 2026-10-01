@@ -765,3 +765,130 @@ The working `.env` was rebuilt from `.env.example`, keeping only
 (unused, or overridden inside Compose). No shared key had a different value.
 The running stack's resolved config was unchanged (no container was
 recreated), and `/info` reported the same settings.
+
+---
+
+## Dashboard redesign: organized by the buyer's questions
+
+### What
+
+The single-page dashboard became seven pages (commit `20394b3`), organized by
+the questions a bank's evaluation team actually asks, the way customer POC
+dashboards are built:
+
+- **Overview:** "Prepared for Cobalt Harbor Bank", one verdict card per
+  question (status, headline number, one plain-language sentence, each
+  criterion against its target), a line naming the runs shown (size, backend,
+  date), and a note when those runs used different backends.
+- **Accuracy · Privacy · Isolation · Performance:** each opens with its
+  acceptance criteria. Accuracy has a per-question table where selecting a
+  row opens a **trace** (question → retrieved chunks with similarity and
+  excerpt → answer → code-attached citations → per-stage timings), and a
+  **before/after** against the Task 1 baseline (7/9 → 9/9, per question: the
+  CVV and $300,000-wire questions went from fail to fixed).
+- **Run a test · Report:** the existing upload flow (now with per-request
+  traces kept in the browser session only) and the HTML download, which now
+  includes "Prepared for" and the criteria table.
+- **Acceptance criteria** in `dashboard/acceptance.toml`. Owner-set targets:
+  answer accuracy ≥ 90%, PII scan P95 ≤ 200 ms, 0 canaries in
+  answers/logs/storage, air-gap PASS. Placeholders to confirm with the buyer:
+  detector recall ≥ 95%, unmasked canaries ≤ 0, end-to-end P95 ≤ 5 s.
+- Provenance and raw tables moved into collapsed **Evidence** sections;
+  report sources into a collapsed **Settings** section (same defaults).
+  Tooltips define P95, P50, P99, recall, precision, canary, air gap, unmasked,
+  similarity, and support.
+
+Current verdicts (default selections): Accuracy ✅ (9/9), Privacy ⚠️ known gap
+(0/207 downstream ✅; recall 90.1% and 43/207 unmasked are known gaps),
+Isolation ✅ (PASS), Performance ✅ (PII scan P95 92 ms, end-to-end 3.3 s,
+native Ollama, n=200).
+
+### How
+
+- `st.navigation` with one module per page in `dashboard/views/`, each
+  `render(ctx)`. `context.py` loads the selected reports once per rerun into a
+  `Context`, so every page and the HTML report use the same runs and verdicts.
+- `criteria.py` is pure Python: load and validate the TOML (unknown metric,
+  comparison, question, or format, and duplicate ids, are errors), measure
+  each metric from the reports, evaluate, and roll up the worst status per
+  question (fail > no data > known gap > pass).
+- `eval_rag.py` now stores a 400-character excerpt of each retrieved chunk
+  (policy text after the Trust Engine), so the trace can show what was
+  retrieved. Older reports say "(not stored in this report)".
+- Scripts now record their git commit at the **start** of a run, which is
+  more accurate (it's the code that ran) and lets work continue during long
+  runs without marking reports dirty.
+- Tests: 31 new, 64 in the dashboard suite. They cover the status rules
+  including edge cases (the target itself passes; whitespace isn't a
+  documented cause; a pass never shows its known-gap note), config
+  validation, measurements from realistic fixture reports, every page
+  rendered through Streamlit's `AppTest` with no gateway, the trace, the
+  before/after, and the full app with navigation and default selections.
+
+### Why
+
+- **Pages follow the buyer's questions, not the system's parts.** A
+  compliance lead's first question is "is it safe and does it work", not
+  "show me the canary JSON". Verdicts come first, evidence one click down,
+  and nothing was removed: every table from the old tabs is still on a page
+  or in an Evidence section.
+- **"Known gap" must be earned.** A dashboard that turns every miss amber is
+  as misleading as one that hides misses. A miss is a known gap only when the
+  config names its documented cause (and that text is shown); otherwise it's
+  a red fail. Missing data is "no data", never a pass.
+- **Mixed backends are called out, not blended.** The Overview says when the
+  selected runs used different backends (e.g. native-Ollama latency with an
+  all-Docker air-gap check), and every criterion names the run it was
+  measured on.
+- **Privacy rules unchanged.** Eval questions are the project's own synthetic
+  set, so traces can show them. Live-run traces (masked question, answer,
+  citations) live in session memory only; saved runs and the report still
+  hold no question text. No new network calls: a full page load was checked
+  in the browser, and all 135 requests went to `localhost:8501`, including
+  the icon font.
+
+### What building it surfaced
+
+- **A new eval run for the trace view** (`reports/eval_rag_20260930-234412.json`,
+  commit `b3863cc`, all-Docker CPU): 9/9 answers, 2/2 refusals, evidence cited
+  9/9, now with chunk excerpts. Per-question times were 31-344 s because the
+  machine was heavily loaded during the run (load average around 15); these
+  are real and labeled as CPU, and headline latency still comes from the
+  200-request native run.
+- **Eval load averages were mislabeled.** Since Task 8, `eval_rag.py` runs
+  in the `tools` container, where `os.getloadavg()` reports Docker's VM, not
+  the Mac (this run recorded 0.3 → 10.6 while the Mac was at around 15). The
+  HTML report had been printing it as "RAG eval (host)". Reports now record
+  `load_measured_in` (`docker_vm` or `host`), and older reports without it
+  show "where not recorded" rather than assuming the host.
+
+### Demo script notes (about 7 minutes)
+
+1. **Overview (1 min).** "This is a POC readout for Cobalt Harbor Bank. Four
+   questions, four verdicts." Point at the runs line: every number names its
+   run, size, and backend. Call out the backend note, since latency is native
+   Ollama while isolation is all-Docker, and say why (the Mac's GPU isn't
+   available to Docker).
+2. **Accuracy (1.5 min).** Select `cvv_deletion` to open the trace: the
+   question, the chunks retrieved with similarity scores, the answer, and the
+   citation, which **code** attached (the model never writes citations).
+   Scroll to before/after: 7/9 → 9/9, and be explicit that the prompt,
+   citations, and runtime all changed, so the gain isn't one change.
+3. **Privacy (1.5 min).** The key distinction: **0/207** planted PII values
+   reached answers, logs, or storage, but the Trust Engine **missed 43/207**
+   before the models. Name the known gap (bare numbers with no context) and
+   the trade-off (masking every number would mask order IDs too). Hover
+   *recall* for the definition.
+4. **Isolation (1 min).** PASS, with the control probe as proof the test can
+   detect egress. Volunteer the proxy's route out before anyone asks.
+5. **Performance (1 min).** PII scan P95 92 ms against a 200 ms target, n=200.
+   Hover *P95*. Show "All latency runs" so no run is hidden, including the
+   slower all-Docker CPU runs.
+6. **Run a test + Report (1 min).** Upload `data/sample_batches/
+   policy_questions.csv`, watch the live chart, select a request to trace it
+   (session only). Download the report and point at its criteria table and
+   methodology.
+
+Have ready: `acceptance.toml` (targets are editable, and a miss needs a
+written cause to be amber), `scripts/airgap_check.py` (you can rerun it
+live), and the build log's list of known gaps.

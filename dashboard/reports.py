@@ -71,6 +71,9 @@ def summarize_eval_rag(path: Path, report: dict) -> dict:
             (report.get("environment") or {}).get("host_load_avg_before"),
             (report.get("environment") or {}).get("host_load_avg_after"),
         ],
+        # Runs inside the tools container measure the Docker VM; older reports don't say.
+        "load_where": {"host": "host", "docker_vm": "Docker VM"}.get(
+            (report.get("environment") or {}).get("load_measured_in"), "where not recorded"),
         "questions": len(results),
         "retrieval_hits": sum(bool(r["retrieval_hit"]) for r in answerable),
         "top1": sum(r.get("expected_rank") == 1 for r in answerable),

@@ -147,16 +147,37 @@ docker compose run --rm backend pytest                        # tests
 
 ### Dashboard
 
-Open http://localhost:8501, upload a CSV (a `question` column) or JSONL
-(`{"question": ...}` per line) batch (try `data/sample_batches/`), click
-**Run batch** to watch per-stage latency live, review the saved RAG eval,
-detector, and canary results under **Results**, and download a self-contained
-HTML report with methodology under **Report**. Uploaded questions are never
-saved; runs are stored in `reports/` as counts and timings only. The same batch
-runs without the UI:
+http://localhost:8501, organized by the questions a buyer asks:
+
+| Page | Answers |
+|---|---|
+| **Overview** | One verdict per question (✅ pass, ⚠️ known gap, ❌ fail, ⏳ no data), each headline number against its target, and which runs are shown (size, backend, date) |
+| **Accuracy** | Does it answer correctly? Per-question results; select a row for a trace (question, retrieved chunks with similarity, answer, citations, per-stage timings); before/after against the Task 1 baseline |
+| **Privacy** | Is PII masked before the models, and does any reach answers, logs, or storage? Detector precision/recall and the canary audit |
+| **Isolation** | Is it cut off from the internet? The air-gap check: containers, probes, control |
+| **Performance** | How long does the PII scan add, and a full answer? P50/P95/P99 per stage, all latency runs |
+| **Run a test** | Upload a CSV or JSONL batch and watch per-stage latency live; per-request traces stay in the browser session |
+| **Report** | Download one self-contained HTML report with the criteria and methodology |
+
+Targets live in [`dashboard/acceptance.toml`](dashboard/acceptance.toml). A
+number that misses its target is a *known gap* only if the file names its
+documented cause; otherwise it's a *fail*. Provenance (source file, commit,
+backend, raw tables) is in the collapsed **Evidence** sections; which saved
+run each page uses is under **Settings** in the sidebar. Uploaded questions
+are never saved; saved runs hold counts and timings only. The same batch runs
+without the UI:
 `docker compose run --rm dashboard python batch.py /data/sample_batches/policy_questions.jsonl`.
 
-After step 2, the sandbox needs no internet access.
+### Screenshots
+
+Taken from the running dashboard; every value shown comes from a saved run,
+and all data is synthetic.
+
+| | |
+|---|---|
+| **Overview:** verdict per buyer question against its target ![Overview](docs/images/dashboard-overview.jpg) | **Accuracy:** trace for one question ![Accuracy trace](docs/images/dashboard-accuracy-trace.jpg) |
+| **Privacy:** canaries unmasked vs found downstream ![Privacy](docs/images/dashboard-privacy.jpg) | **Performance:** headline run with P50/P95 per stage ![Performance](docs/images/dashboard-performance.jpg) |
+| **Isolation:** air-gap check ![Isolation](docs/images/dashboard-isolation.jpg) | |
 
 ### Dev option: native Ollama on macOS
 

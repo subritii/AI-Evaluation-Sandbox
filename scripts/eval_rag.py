@@ -341,8 +341,12 @@ def main() -> None:
         },
         # Timings depend on what else the machine was doing; record it.
         "environment": {
+            # Key names predate the tools container; `load_measured_in` says
+            # where the numbers come from. Inside a container, getloadavg()
+            # reports the Docker VM, not the Mac.
             "host_load_avg_before": load_before,
             "host_load_avg_after": os.getloadavg(),
+            "load_measured_in": "docker_vm" if Path("/.dockerenv").exists() else "host",
             "host_cpus": os.cpu_count(),
         },
         "results": [asdict(r) for r in results],

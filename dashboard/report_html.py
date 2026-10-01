@@ -354,7 +354,8 @@ def _methodology(batch, rag, det, can, airgap=None) -> str:
                 "this figure does not include model load. The host scripts below record the Mac's own load.</td></tr>"
             )
     if rag:
-        load_rows.append(f"<tr><td>RAG eval (host)</td><td>{_load(rag['host_load_avg'])}</td></tr>")
+        load_rows.append(f"<tr><td>RAG eval ({_e(rag.get('load_where', 'where not recorded'))})</td>"
+                         f"<td>{_load(rag['host_load_avg'])}</td></tr>")
     if can:
         load_rows.append(f"<tr><td>Canary audit (host)</td><td>{_load(can['host_load_avg'])}</td></tr>")
     gaps = list(KNOWN_GAPS)
