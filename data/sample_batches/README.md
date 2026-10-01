@@ -8,3 +8,4 @@ no PII; two are out of scope and should be refused.
 
 - `policy_questions.csv`: needs a `question` column; other columns are ignored.
 - `policy_questions.jsonl`: one `{"question": ...}` object per line.
+- `demo_pii.csv`: 10 demo questions, most with synthetic PII written the way a customer would (name, SSN, account and routing numbers, card, email, phone, IBAN), plus two out-of-scope questions.
